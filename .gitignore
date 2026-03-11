@@ -1,0 +1,45 @@
+# Runtime data
+data/
+
+# Environment files — NEVER commit real secrets
+.env
+.env.local
+.env.*.local
+backend/.env.dev
+backend/.env.prod
+backend/.env.staging
+**/.env.dev
+**/.env.prod
+**/.env.local
+
+# SQLite dev database
+backend/dev.db
+*.db
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+htmlcov/
+
+# Node
+node_modules/
+.next/
+out/
+
+# Docker
+*.log
+
+# Agent workspace (logs only)
+.agent/logs/
+.agent/handoff/archive/
+
+# IDE
+.vscode/settings.json
+.idea/
+*.swp
+*.swo

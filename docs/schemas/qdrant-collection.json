@@ -1,0 +1,161 @@
+{
+  "_comment": "RAG Chatbot 10GB - Qdrant Collection Configuration",
+  "_author": "Alpha (System Architect)",
+  "_version": "1.0",
+
+  "collection_name": "document_chunks",
+
+  "create_collection": {
+    "vectors": {
+      "size": 768,
+      "distance": "Cosine",
+      "on_disk": false
+    },
+    "shard_number": 1,
+    "replication_factor": 1,
+    "write_consistency_factor": 1,
+    "on_disk_payload": true,
+    "hnsw_config": {
+      "m": 16,
+      "ef_construct": 128,
+      "full_scan_threshold": 10000,
+      "max_indexing_threads": 2,
+      "on_disk": false
+    },
+    "wal_config": {
+      "wal_capacity_mb": 32,
+      "wal_segments_ahead": 0
+    },
+    "optimizers_config": {
+      "deleted_threshold": 0.2,
+      "vacuum_min_vector_number": 1000,
+      "default_segment_number": 2,
+      "max_segment_size": 200000,
+      "memmap_threshold": 20000,
+      "indexing_threshold": 10000,
+      "flush_interval_sec": 5,
+      "max_optimization_threads": 1
+    },
+    "quantization_config": {
+      "scalar": {
+        "type": "int8",
+        "quantile": 0.99,
+        "always_ram": true
+      }
+    }
+  },
+
+  "payload_schema": {
+    "doc_id": {
+      "data_type": "keyword",
+      "description": "UUID of parent document",
+      "indexed": true
+    },
+    "filename": {
+      "data_type": "keyword",
+      "description": "Original filename",
+      "indexed": true
+    },
+    "page_number": {
+      "data_type": "integer",
+      "description": "Page number in source document",
+      "indexed": true
+    },
+    "chunk_index": {
+      "data_type": "integer",
+      "description": "Order index within document",
+      "indexed": false
+    },
+    "section": {
+      "data_type": "keyword",
+      "description": "Section header (Phase 2+)",
+      "indexed": true
+    },
+    "keywords": {
+      "data_type": "keyword",
+      "description": "TF-IDF top keywords (Phase 2+)",
+      "indexed": true
+    },
+    "language": {
+      "data_type": "keyword",
+      "description": "Detected language: vi or en",
+      "indexed": true
+    },
+    "content": {
+      "data_type": "text",
+      "description": "Chunk text content for display",
+      "indexed": false
+    }
+  },
+
+  "payload_indexes": [
+    {
+      "field_name": "doc_id",
+      "field_schema": "keyword"
+    },
+    {
+      "field_name": "filename",
+      "field_schema": "keyword"
+    },
+    {
+      "field_name": "page_number",
+      "field_schema": "integer"
+    },
+    {
+      "field_name": "language",
+      "field_schema": "keyword"
+    }
+  ],
+
+  "search_config": {
+    "default_top_k": 10,
+    "score_threshold": null,
+    "hnsw_ef": 128,
+    "exact": false,
+    "with_payload": true,
+    "with_vectors": false
+  },
+
+  "example_point": {
+    "id": "550e8400-e29b-41d4-a716-446655440000",
+    "vector": "[768-dim float32 array]",
+    "payload": {
+      "doc_id": "660e8400-e29b-41d4-a716-446655440001",
+      "filename": "report-2024.pdf",
+      "page_number": 5,
+      "chunk_index": 12,
+      "section": "Chapter 2: Methodology",
+      "keywords": ["regression", "analysis", "data"],
+      "language": "en",
+      "content": "The regression analysis was performed using..."
+    }
+  },
+
+  "example_search_request": {
+    "vector": "[768-dim query embedding]",
+    "limit": 10,
+    "with_payload": true,
+    "filter": {
+      "must": [
+        {
+          "key": "language",
+          "match": {
+            "value": "vi"
+          }
+        }
+      ]
+    },
+    "params": {
+      "hnsw_ef": 128,
+      "exact": false
+    }
+  },
+
+  "memory_notes": {
+    "estimated_ram_per_1k_vectors": "~3MB (with int8 quantization)",
+    "estimated_ram_100k_vectors": "~300MB",
+    "ram_budget": "800MB limit in docker-compose",
+    "max_vectors_in_budget": "~250,000 chunks",
+    "disk_storage": "on_disk_payload=true reduces RAM usage"
+  }
+}

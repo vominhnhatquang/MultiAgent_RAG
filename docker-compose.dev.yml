@@ -1,0 +1,62 @@
+# Development override — dùng với: docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+# Không có memory limits (dev machine thường có > 10GB RAM)
+
+services:
+  backend:
+    build:
+      target: builder
+    mem_limit: ""
+    memswap_limit: ""
+    volumes:
+      - ./backend:/app
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    environment:
+      - ENVIRONMENT=development
+      - DEBUG=true
+    ports:
+      - "8000:8000"
+      - "5678:5678"   # debugpy port
+
+  celery:
+    mem_limit: ""
+    memswap_limit: ""
+    volumes:
+      - ./backend:/app
+    command: celery -A app.celery_app worker --loglevel=debug --concurrency=1
+
+  frontend:
+    build:
+      target: deps
+    mem_limit: ""
+    memswap_limit: ""
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+      - /app/.next
+    command: npm run dev
+    environment:
+      - NODE_ENV=development
+      - NEXT_PUBLIC_API_URL=http://localhost:8000
+    ports:
+      - "3000:3000"
+
+  postgres:
+    mem_limit: ""
+    memswap_limit: ""
+    ports:
+      - "5432:5432"
+
+  qdrant:
+    mem_limit: ""
+    memswap_limit: ""
+
+  redis:
+    mem_limit: ""
+    memswap_limit: ""
+
+  ollama:
+    mem_limit: ""
+    memswap_limit: ""
+    environment:
+      - OLLAMA_MAX_LOADED_MODELS=2
+      - OLLAMA_KEEP_ALIVE=30m

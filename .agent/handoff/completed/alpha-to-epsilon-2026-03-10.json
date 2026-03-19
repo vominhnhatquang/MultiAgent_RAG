@@ -1,0 +1,42 @@
+{
+  "handoff_id": "hf-alpha-epsilon-20260310-001",
+  "from_agent": "alpha",
+  "to_agent": "epsilon",
+  "timestamp": "2026-03-10T20:35:00Z",
+  "phase": 1,
+
+  "deliverables": [
+    "docs/architecture/memory-budget-10gb.md",
+    "docs/architecture/system-overview.md",
+    "docs/schemas/qdrant-collection.json"
+  ],
+
+  "context_summary": "Alpha da hoan thanh memory budget va system topology. Epsilon can doc memory-budget-10gb.md de set docker-compose resource limits. System gom 8 services: frontend, backend, postgres, qdrant, redis, ollama, celery-worker, celery-beat. Phase 1 chi can: postgres, qdrant, ollama, backend, frontend.",
+
+  "constraints": {
+    "memory_limit_mb": "Total 10GB. Xem memory-budget-10gb.md cho chi tiet tung service.",
+    "dependencies": "Docker Compose v2, Docker images: postgres:16, qdrant/qdrant:latest, ollama/ollama:latest, redis:7-alpine, python:3.12-slim, node:20-alpine",
+    "blockers": "Khong co blocker. Epsilon co the chay song song voi Alpha."
+  },
+
+  "acceptance_criteria": [
+    "docker-compose up khoi dong duoc tat ca services Phase 1 (postgres, qdrant, ollama, backend placeholder)",
+    "PostgreSQL 16 co pgvector extension enabled",
+    "Qdrant chay tren port 6333",
+    "Ollama chay tren port 11434 voi nomic-embed-text + gemma2:2b pulled",
+    "Memory limits dung theo memory-budget-10gb.md",
+    "docker stats cho thay tong RAM < 8GB (Phase 1)",
+    "Health check script kiem tra duoc tat ca services"
+  ],
+
+  "notes": "Docker compose resource limits PHAI CO: ollama mem_limit 6500m, postgres mem_limit 800m, qdrant mem_limit 800m, redis mem_limit 300m (Phase 2+), backend mem_limit 500m, frontend mem_limit 300m. Phase 1 co the bo redis va celery containers.",
+
+  "_completion": {
+    "status": "ACCEPTED",
+    "completed_at": "2026-03-10T23:59:00Z",
+    "reviewed_by": "orchestrator",
+    "phase": 1,
+    "all_acceptance_criteria_passed": true,
+    "notes": "Phase 1 infra hoan thanh. docker-compose up chay duoc, tat ca services healthy, RAM < 8GB."
+  }
+}

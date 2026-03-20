@@ -2,7 +2,8 @@
 ## RAG Chatbot 10GB
 
 **Author:** Alpha (System Architect)
-**Version:** 1.0
+**Version:** 1.1
+**Updated:** 2026-03-20 — Reconciled with deployed system (model paths, Qdrant 1.17 API, event loop fixes, shared volumes)
 
 ---
 
@@ -57,9 +58,13 @@ Dung Ollama voi swap strategy: chi 1 large LLM (gemma2 HOAC llama3.1) tai bat ky
 | Model | Size | Purpose | Load Strategy |
 |-------|------|---------|---------------|
 | nomic-embed-text | 0.3GB | Embedding 768-dim | Always loaded |
-| gemma2:2b | 1.6GB | Default chat, HyDE, intent | Always loaded (default) |
+| gemma-2-2b-it (Q8_0 GGUF) | 1.6GB | Default chat, HyDE, intent | Always loaded (default) |
 | bge-reranker-v2 | 0.4GB | Cross-encoder rerank | Always loaded (Phase 2+) |
 | llama3.1:8b | 4.7GB | Heavy offline queries | On-demand swap |
+
+> **Note:** The gemma-2-2b-it model requires the full HuggingFace GGUF path
+> `hf.co/MaziyarPanahi/gemma-2-2b-it-GGUF:Q8_0` when pulling/referencing in Ollama.
+> Short names like `gemma2:2b` return 404 for this quantization.
 
 ### Alternatives Considered
 
@@ -74,7 +79,7 @@ Dung Ollama voi swap strategy: chi 1 large LLM (gemma2 HOAC llama3.1) tai bat ky
 - (+) Ollama API don gian (HTTP), Beta de integrate
 - (+) Built-in model pull, list, load/unload
 - (+) OLLAMA_KEEP_ALIVE=5m tu dong unload idle models
-- (-) Swap time ~15-20s khi chuyen gemma2 <-> llama3.1
+- (-) Swap time ~15-20s khi chuyen gemma-2-2b-it <-> llama3.1
 - (-) Block requests during swap
 
 ---
@@ -85,7 +90,7 @@ Dung Ollama voi swap strategy: chi 1 large LLM (gemma2 HOAC llama3.1) tai bat ky
 **Date:** 2026-03-10
 
 ### Context
-Can cloud LLM cho hard queries ma gemma2:2b khong xu ly tot, khong ton RAM local.
+Can cloud LLM cho hard queries ma gemma-2-2b-it khong xu ly tot, khong ton RAM local.
 
 ### Decision
 Dung Google Gemini 2.5 Pro API (free tier: 15 RPM, 1M tokens/day).
@@ -108,7 +113,7 @@ Dung Google Gemini 2.5 Pro API (free tier: 15 RPM, 1M tokens/day).
 
 ### Routing Logic
 ```
-Easy + Online  -> gemma2:2b (local, fast)
+Easy + Online  -> gemma-2-2b-it (local, fast, via hf.co/MaziyarPanahi/gemma-2-2b-it-GGUF:Q8_0)
 Hard + Online  -> Gemini API (cloud, smart)
 Any  + Offline -> llama3.1:8b (local, swap)
 ```
@@ -244,7 +249,8 @@ Celery voi Redis lam broker (share Redis instance voi cache, different DB number
 ### Config
 ```
 Broker: redis://redis:6379/1 (DB 1, separate from cache DB 0)
-Worker concurrency: 2 (RAM constraint)
+Worker concurrency: 1 (RAM constraint, single worker sufficient)
+Worker memory: 500MB (increased from 200MB to prevent OOM during ingestion)
 Task retry: 3 times with exponential backoff
 ```
 
@@ -252,7 +258,7 @@ Task retry: 3 times with exponential backoff
 - (+) Document processing khong block API
 - (+) Retry logic cho transient failures
 - (+) Celery Beat cho periodic tasks (archival, cleanup)
-- (-) Them 1 worker process (~200MB RAM)
+- (-) Them 1 worker process (~500MB RAM)
 - (-) Celery co the complex cho simple tasks
 
 ---
@@ -298,7 +304,7 @@ Unload sau 5 phut idle de free RAM.
 Users often query voi implicit terms (vd: "so sanh chi phi" thay vi "bang gia"). Vector search thuan tuy miss nhung documents nay.
 
 ### Decision
-Implement HyDE: generate hypothetical answer (gemma2, 100 tokens) -> embed -> combine 70% query + 30% hyde.
+Implement HyDE: generate hypothetical answer (gemma-2-2b-it, 100 tokens) -> embed -> combine 70% query + 30% hyde.
 
 ### Rationale
 - HyDE chuyen query tu "question space" sang "answer space"
@@ -307,7 +313,7 @@ Implement HyDE: generate hypothetical answer (gemma2, 100 tokens) -> embed -> co
 
 ### Trade-offs
 - (+) Significant improvement cho implicit/vague queries
-- (+) Khong ton them RAM (dung gemma2 da loaded)
+- (+) Khong ton them RAM (dung gemma-2-2b-it da loaded)
 - (-) +1s latency per query
 - (-) Doi khi hypothetical answer sai huong -> worse results
 - (-) Khong can thiet cho exact keyword queries
@@ -319,3 +325,105 @@ Max tokens: 100
 Temperature: 0.3 (low, focused)
 Combination: 0.7 * query_vec + 0.3 * hyde_vec (normalized)
 ```
+
+---
+
+## ADR-010: Qdrant v1.17 Client API Migration
+
+**Status:** Accepted
+**Date:** 2026-03-20
+
+### Context
+qdrant-client 1.17+ requires compatible Qdrant server v1.17.0 and introduces breaking API changes.
+
+### Decision
+Upgrade to Qdrant v1.17.0 (server) and adopt the new client API.
+
+### Key Changes
+- `qdrant.search()` → `qdrant.query_points()` with `.points` result access
+- `QuantizationConfig(scalar=ScalarQuantization(...))` wrapper removed — pass `ScalarQuantization(...)` directly (QuantizationConfig is now a Union type in 1.17+)
+
+### Consequences
+- All retrieval code updated to use `query_points()` and iterate `.points`
+- Quantization config simplified in collection creation
+
+---
+
+## ADR-011: Celery Event Loop Isolation
+
+**Status:** Accepted
+**Date:** 2026-03-20
+
+### Context
+Celery's `async_to_sync` creates a new event loop per task invocation. Sharing async singletons (SQLAlchemy engine, AsyncQdrantClient) across tasks caused `RuntimeError: Event loop is closed` and connection conflicts.
+
+### Decision
+Create fresh async resources per task invocation instead of sharing singletons.
+
+### Implementation
+- Celery tasks create a fresh SQLAlchemy `AsyncEngine` per invocation (not shared with FastAPI's engine)
+- Indexer creates a fresh `AsyncQdrantClient` per call (not a shared singleton)
+- Each task owns its resources and disposes them on completion
+
+### Trade-offs
+- (+) Eliminates event loop conflicts completely
+- (+) Each task is fully isolated — no cross-task state leakage
+- (-) Slight overhead from creating connections per task (~50ms)
+- (-) Cannot share connection pools between Celery and FastAPI
+
+---
+
+## ADR-012: Shared Upload Volume Between Backend and Celery
+
+**Status:** Accepted
+**Date:** 2026-03-20
+
+### Context
+Backend receives file uploads via API, but Celery worker processes them asynchronously in a separate container. The worker needs access to the uploaded files.
+
+### Decision
+Use a shared Docker volume `upload_data:/app/data/uploads` mounted in both the backend and celery-worker containers.
+
+### docker-compose config
+```yaml
+volumes:
+  upload_data:
+
+services:
+  backend:
+    volumes:
+      - upload_data:/app/data/uploads
+  celery-worker:
+    volumes:
+      - upload_data:/app/data/uploads
+```
+
+### Trade-offs
+- (+) Simple file transfer — backend writes, celery reads
+- (+) No need for object storage (S3) or database BLOBs
+- (-) Only works on single-host Docker — not suitable for multi-node
+- (-) Must handle cleanup of processed files
+
+---
+
+## ADR-013: Document Status Constraint Update
+
+**Status:** Accepted
+**Date:** 2026-03-20
+
+### Context
+Original `chk_documents_status` CHECK constraint only included `processing`, `indexed`, `failed`. Documents enqueued to Celery but not yet picked up had no valid status.
+
+### Decision
+Add `queued` status to the constraint: `CHECK (status IN ('queued', 'processing', 'indexed', 'failed'))`.
+
+### Flow
+```
+Upload -> queued -> processing -> indexed
+                               -> failed (on error)
+```
+
+### Consequences
+- API returns `status: queued` immediately on upload (202 Accepted)
+- Celery worker transitions `queued -> processing` when it picks up the task
+- Frontend can distinguish "waiting in queue" from "actively processing"

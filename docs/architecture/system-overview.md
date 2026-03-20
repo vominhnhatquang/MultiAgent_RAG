@@ -2,7 +2,8 @@
 ## High-Level Architecture Document
 
 **Author:** Alpha (System Architect)
-**Version:** 1.0
+**Version:** 1.1
+**Updated:** 2026-03-20 — Reconciled with deployed system (model paths, memory limits, guard threshold)
 **Constraint:** 10GB RAM hard limit
 
 ---
@@ -44,7 +45,7 @@ graph TB
 
     subgraph MODELS["Local Models"]
         NE[nomic-embed-text<br/>0.3GB - Always]
-        G2[gemma2:2b<br/>1.6GB - Default]
+        G2[gemma-2-2b-it Q8_0 GGUF<br/>1.6GB - Default]
         RR[bge-reranker-v2<br/>0.4GB - Phase 2]
         L3[llama3.1:8b<br/>4.7GB - On-demand SWAP]
     end
@@ -107,6 +108,7 @@ graph LR
     CK -->|HTTP| OL
     CB -->|schedule| CK
     CK -->|broker| RD
+    BE -.->|upload_data volume| CK
 ```
 
 ### Port Mapping
@@ -147,7 +149,7 @@ graph LR
 ### 4.4 AI Layer
 - **Ollama**: Local model serving voi memory-aware scheduling
 - **Gemini API**: Cloud fallback cho hard queries (khong ton RAM local)
-- **Model Swap**: Chi 1 large LLM (gemma2 HOAC llama3.1) tai 1 thoi diem
+- **Model Swap**: Chi 1 large LLM (gemma-2-2b-it HOAC llama3.1) tai 1 thoi diem
 
 ### 4.5 Storage Layer
 - **PostgreSQL 16 + pgvector**: Metadata, chat history, BM25 full-text search, backup vector storage
@@ -202,9 +204,9 @@ gantt
 ## 7. Constraints & Boundaries
 
 1. **RAM Hard Limit**: Tong 10GB - moi component co memory limit trong docker-compose
-2. **Model Exclusivity**: KHONG BAO GIO load dong thoi gemma2 (1.6GB) va llama3.1 (4.7GB)
+2. **Model Exclusivity**: KHONG BAO GIO load dong thoi gemma-2-2b-it (1.6GB) va llama3.1 (4.7GB)
 3. **Concurrency**: Max 5-10 concurrent chat sessions
 4. **File Size**: Max upload 50MB per file (PDF, DOCX, MD)
 5. **Chunk Size**: 512 tokens, 50 token overlap (RecursiveCharacterTextSplitter)
 6. **Embedding Dim**: 768 (nomic-embed-text)
-7. **Rerank Threshold**: relevance >= 0.7 cho Strict mode
+7. **Guard Threshold**: relevance >= 0.4 cho Strict mode (vector cosine similarity; lowered from 0.7 since reranker unavailable, pipeline uses `vector_score` fallback)

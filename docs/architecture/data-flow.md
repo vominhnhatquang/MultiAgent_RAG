@@ -2,7 +2,8 @@
 ## Document Pipeline + Chat Pipeline Chi Tiet
 
 **Author:** Alpha (System Architect)
-**Version:** 1.0
+**Version:** 1.1
+**Updated:** 2026-03-20 — Reconciled with deployed system (model paths, Qdrant API, guard threshold)
 
 ---
 
@@ -20,9 +21,9 @@ sequenceDiagram
     participant QD as Qdrant
 
     U->>API: POST /api/v1/documents/upload (file)
-    API->>PG: INSERT document (status: processing)
+    API->>API: INSERT document (status: queued)
     API->>CW: enqueue ingest_document_task(doc_id)
-    API-->>U: 202 Accepted {doc_id, status: processing}
+    API-->>U: 202 Accepted {doc_id, status: queued}
 
     Note over CW: Background Processing
     CW->>PG: SELECT document WHERE id = doc_id
@@ -198,7 +199,7 @@ sequenceDiagram
     rect rgb(240, 240, 255)
         Note over API,QD: Step 5: Hybrid Retrieval
         par Vector Search
-            API->>QD: search(combined_vec, top=10)
+            API->>QD: query_points(combined_vec, top=10)
             QD-->>API: vector_results
         and BM25 Search
             API->>PG: SELECT ... WHERE to_tsvector @@ plainto_tsquery
@@ -215,9 +216,9 @@ sequenceDiagram
 
     rect rgb(255, 240, 240)
         Note over API: Step 7: Strict Guard (Phase 2+)
-        alt max(score) < 0.7
+        alt max(score) < 0.4
             API-->>U: SSE: "Khong co thong tin trong tai lieu"
-        else score >= 0.7
+        else score >= 0.4
             Note over API: Continue to generation
         end
     end
@@ -266,7 +267,7 @@ Default: "strict" (safe default)
 
 #### Step 3: Intent Classification (Phase 2+)
 ```
-Model:  gemma2:2b
+Model:  gemma-2-2b-it (Q8_0 GGUF)
 Prompt: "Classify: is this a document question or chit-chat? Reply only: RAG or CHAT"
 Input:  user query
 Output: "RAG" | "CHAT"
@@ -279,7 +280,7 @@ Phase 1: Skip, treat all as RAG
 
 #### Step 4: HyDE - Hypothetical Document Embedding (Phase 2+)
 ```
-Model:  gemma2:2b
+Model:  gemma-2-2b-it (Q8_0 GGUF)
 Prompt: "Given this question, write a short paragraph that would answer it: {query}"
 Config: max_tokens=100, temperature=0.3
 Process:
@@ -324,15 +325,18 @@ Phase 1: Skip, use vector scores directly, take top 5
 
 #### Step 7: Strict Guard (Phase 2+)
 ```
-Threshold: 0.7 (configurable via STRICT_GUARD_THRESHOLD env)
+Threshold: 0.4 (configurable via STRICT_GUARD_THRESHOLD env)
 Logic:
   if mode == "strict":
-    if max(reranked_scores) < threshold:
+    if max(scores) < threshold:
       return "Khong co thong tin lien quan trong tai lieu da upload."
     else:
       continue with top chunks where score >= threshold
   else (general):
     continue regardless (but still use scores for ranking)
+Note: Without cross-encoder reranker, pipeline falls back to vector_score
+  (cosine similarity 0-1) instead of rrf_score. Threshold 0.4 is calibrated
+  for cosine similarity; was 0.7 when using cross-encoder reranker scores.
 Phase 1: Skip, always continue
 ```
 
@@ -356,7 +360,7 @@ Prompt Assembly:
   ]
 
 Routing:
-  Easy + Online  -> gemma2:2b (Ollama, loaded)
+  Easy + Online  -> gemma-2-2b-it via Ollama (hf.co/MaziyarPanahi/gemma-2-2b-it-GGUF:Q8_0)
   Hard + Online  -> Gemini API (cloud, 0 RAM)
   Any + Offline  -> llama3.1:8b (Ollama, swap required)
 
@@ -372,7 +376,7 @@ SSE Format:
   data: {"content": "tok", "done": false}
 
   event: token
-  data: {"content": "", "done": true, "sources": [...], "model": "gemma2:2b"}
+  data: {"content": "", "done": true, "sources": [...], "model": "gemma-2-2b-it"}
 
 Save:
   1. INSERT user message to PG

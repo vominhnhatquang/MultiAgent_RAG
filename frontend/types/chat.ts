@@ -5,6 +5,7 @@ export interface Message {
   content: string;
   sources?: Source[];
   model?: string;
+  difficulty?: "easy" | "medium" | "hard";
   total_tokens?: number;
   timestamp: string;
 }

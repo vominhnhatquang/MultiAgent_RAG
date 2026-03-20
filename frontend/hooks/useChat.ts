@@ -72,6 +72,7 @@ export function useChat(): UseChatReturn {
       let assistantContent = "";
       let assistantSources: Source[] = [];
       let assistantModel = "";
+      let assistantDifficulty: "easy" | "medium" | "hard" | undefined;
       let messageId = "";
 
       // Create new abort controller for this request
@@ -85,6 +86,7 @@ export function useChat(): UseChatReturn {
           {
             onSession: (data) => {
               newSessionId = data.sessionId;
+              if (data.difficulty) assistantDifficulty = data.difficulty as "easy" | "medium" | "hard";
             },
             onSources: (data) => {
               assistantSources = data.sources;
@@ -97,6 +99,7 @@ export function useChat(): UseChatReturn {
             onDone: (data) => {
               assistantModel = data.model;
               messageId = data.messageId;
+              if (data.difficulty) assistantDifficulty = data.difficulty as "easy" | "medium" | "hard";
             },
             onNoData: (data) => {
               assistantContent = data.message;
@@ -118,6 +121,7 @@ export function useChat(): UseChatReturn {
           timestamp: new Date().toISOString(),
           sources: assistantSources.length > 0 ? assistantSources : undefined,
           model: assistantModel || undefined,
+          difficulty: assistantDifficulty,
         };
 
         setMessages((prev) => [...prev, assistantMessage]);
@@ -137,6 +141,7 @@ export function useChat(): UseChatReturn {
               timestamp: new Date().toISOString(),
               sources: assistantSources.length > 0 ? assistantSources : undefined,
               model: assistantModel || undefined,
+              difficulty: assistantDifficulty,
             };
             setMessages((prev) => [...prev, assistantMessage]);
           }

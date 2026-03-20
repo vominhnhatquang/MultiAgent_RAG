@@ -1,5 +1,11 @@
-"""Route generation requests to Ollama (local) or Gemini (cloud)."""
+"""Route generation requests to Ollama (local) or Gemini (cloud).
+
+Supports difficulty-based model selection:
+  easy/medium → chat model (fast)
+  hard → heavy model (better reasoning)
+"""
 from collections.abc import AsyncGenerator
+from dataclasses import dataclass
 from enum import StrEnum
 
 import httpx
@@ -17,40 +23,102 @@ class LLMBackend(StrEnum):
     GEMINI = "gemini"
 
 
-def choose_backend(mode: str) -> LLMBackend:
+# Friendly display names for raw model identifiers
+_DISPLAY_NAMES: dict[str, str] = {
+    "gemini-1.5-flash": "Gemini 1.5 Flash",
+    "gemini-1.5-pro": "Gemini 1.5 Pro",
+    "gemini-2.0-flash": "Gemini 2.0 Flash",
+    "gemini-2.5-flash": "Gemini 2.5 Flash",
+    "gemini-2.5-pro": "Gemini 2.5 Pro",
+}
+
+
+def _friendly_name(raw_model: str) -> str:
+    """Convert raw model id to human-friendly name."""
+    if raw_model in _DISPLAY_NAMES:
+        return _DISPLAY_NAMES[raw_model]
+    # hf.co/MaziyarPanahi/gemma-2-2b-it-GGUF:Q8_0 → Gemma 2 2B (Q8_0)
+    if "/" in raw_model:
+        parts = raw_model.rsplit("/", 1)[-1]  # gemma-2-2b-it-GGUF:Q8_0
+        name, _, quant = parts.partition(":")
+        name = name.replace("-GGUF", "").replace("-gguf", "")
+        # Title-case with hyphens → spaces
+        name = name.replace("-", " ").title()
+        if quant:
+            return f"{name} ({quant})"
+        return name
+    return raw_model
+
+
+@dataclass
+class ModelChoice:
+    """Result of model selection."""
+    backend: LLMBackend
+    model_id: str        # raw id sent to API
+    display_name: str    # human-friendly name for UI
+
+
+def choose_model(difficulty: str = "medium") -> ModelChoice:
     """
-    Phase 1: defaults to Ollama.
-    Override via FORCE_LLM_BACKEND env var for testing:
-      FORCE_LLM_BACKEND=gemini  → Gemini API (requires GEMINI_API_KEY)
-      FORCE_LLM_BACKEND=ollama  → Ollama (default)
+    Select LLM backend + model based on query difficulty.
+
+    Routing:
+        FORCE_LLM_BACKEND=gemini → always Gemini
+        FORCE_LLM_BACKEND=ollama (or auto):
+            easy/medium → ollama_chat_model
+            hard        → ollama_heavy_model (fallback to chat_model)
     """
+    # Gemini forced
     if settings.force_llm_backend == "gemini" and settings.gemini_api_key:
-        return LLMBackend.GEMINI
-    return LLMBackend.OLLAMA
+        return ModelChoice(
+            backend=LLMBackend.GEMINI,
+            model_id=settings.gemini_model,
+            display_name=_friendly_name(settings.gemini_model),
+        )
+
+    # Ollama: difficulty-based routing
+    if difficulty == "hard" and settings.ollama_heavy_model:
+        model_id = settings.ollama_heavy_model
+    else:
+        model_id = settings.ollama_chat_model
+
+    return ModelChoice(
+        backend=LLMBackend.OLLAMA,
+        model_id=model_id,
+        display_name=_friendly_name(model_id),
+    )
+
+
+def choose_backend(mode: str) -> LLMBackend:
+    """Legacy compat — returns backend only."""
+    return choose_model().backend
 
 
 async def stream_generate(
     prompt: BuiltPrompt,
     mode: str = "strict",
+    model_choice: ModelChoice | None = None,
 ) -> AsyncGenerator[str, None]:
     """Yield token strings from the chosen LLM backend."""
-    backend = choose_backend(mode)
-    if backend == LLMBackend.OLLAMA:
-        async for token in _stream_ollama(prompt):
+    if model_choice is None:
+        model_choice = choose_model()
+
+    if model_choice.backend == LLMBackend.OLLAMA:
+        async for token in _stream_ollama(prompt, model_choice.model_id):
             yield token
     else:
         async for token in _stream_gemini(prompt):
             yield token
 
 
-async def _stream_ollama(prompt: BuiltPrompt) -> AsyncGenerator[str, None]:
+async def _stream_ollama(prompt: BuiltPrompt, model_id: str | None = None) -> AsyncGenerator[str, None]:
     import json
 
-    # Convert prompt.messages to Ollama chat format
+    model = model_id or settings.ollama_chat_model
     ollama_messages = [{"role": "system", "content": prompt.system}] + prompt.messages
 
     payload = {
-        "model": settings.ollama_chat_model,
+        "model": model,
         "messages": ollama_messages,
         "stream": True,
         "options": {"temperature": 0.1, "num_predict": 512},

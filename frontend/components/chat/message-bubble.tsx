@@ -81,11 +81,28 @@ export function MessageBubble({ message, isLast = false, sessionId, onFeedback }
           </div>
         )}
 
-        {/* Model info & Feedback */}
+        {/* Model info & Difficulty & Feedback */}
         {!isUser && (
           <div className="flex items-center justify-between pt-2">
-            <div className="text-xs text-muted-foreground">
-              {message.model && `Model: ${message.model}`}
+            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+              {message.model && (
+                <span className="inline-flex items-center gap-1 rounded-md bg-muted px-2 py-0.5 font-medium">
+                  <Bot className="h-3 w-3" />
+                  {message.model}
+                </span>
+              )}
+              {message.difficulty && (
+                <span
+                  className={cn(
+                    "inline-flex items-center rounded-full px-2 py-0.5 font-semibold text-[10px] uppercase tracking-wide",
+                    message.difficulty === "easy" && "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400",
+                    message.difficulty === "medium" && "bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400",
+                    message.difficulty === "hard" && "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400"
+                  )}
+                >
+                  {message.difficulty === "easy" ? "⚡ Easy" : message.difficulty === "medium" ? "🔶 Medium" : "🔴 Hard"}
+                </span>
+              )}
             </div>
             {isLast && onFeedback && sessionId && message.id && !message.id.startsWith("temp-") && (
               <FeedbackButtons messageId={message.id} sessionId={sessionId} onFeedback={onFeedback} />

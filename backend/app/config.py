@@ -56,6 +56,7 @@ class Settings(BaseSettings):
     ollama_base_url: str = "http://localhost:11434"
     ollama_embed_model: str = "nomic-embed-text"
     ollama_chat_model: str = "gemma2:2b"
+    ollama_heavy_model: str = ""  # e.g. Llama-3.1-8B — used for complex queries
     ollama_timeout: int = 120
 
     # Gemini

@@ -4,10 +4,10 @@
 import type { Source, SSEEvent } from "@/types";
 
 export interface SSECallbacks {
-  onSession?: (data: { sessionId: string; model: string; mode: "strict" | "general" }) => void;
+  onSession?: (data: { sessionId: string; model: string; mode: "strict" | "general"; difficulty?: string }) => void;
   onSources?: (data: { sources: Source[] }) => void;
   onToken?: (token: string) => void;
-  onDone?: (data: { messageId: string; model: string; totalTokens: number }) => void;
+  onDone?: (data: { messageId: string; model: string; difficulty?: string; totalTokens: number }) => void;
   onNoData?: (data: { message: string; code: string }) => void;
   onError?: (error: { message: string; code: string }) => void;
 }
@@ -104,6 +104,7 @@ export async function streamChat(
                 sessionId: data.session_id,
                 model: data.model,
                 mode: data.mode,
+                difficulty: data.difficulty,
               });
               break;
             case "sources":
@@ -116,6 +117,7 @@ export async function streamChat(
               callbacks.onDone?.({
                 messageId: data.message_id,
                 model: data.model || data.model_used,
+                difficulty: data.difficulty,
                 totalTokens: data.total_tokens,
               });
               break;
@@ -156,6 +158,7 @@ export async function streamChat(
             callbacks.onDone?.({
               messageId: data.message_id,
               model: data.model || data.model_used,
+              difficulty: data.difficulty,
               totalTokens: data.total_tokens,
             });
           }

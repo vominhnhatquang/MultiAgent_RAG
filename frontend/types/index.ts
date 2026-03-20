@@ -19,6 +19,7 @@ export interface Message {
   sources?: Source[];
   model_used?: string;
   model?: string;
+  difficulty?: "easy" | "medium" | "hard";
   total_tokens?: number;
 }
 
@@ -81,6 +82,7 @@ export interface SSEMetaEvent {
     session_id: string;
     model: string;
     mode: "strict" | "general";
+    difficulty?: "easy" | "medium" | "hard";
   };
 }
 
@@ -99,6 +101,7 @@ export interface SSEDoneEvent {
     done: true;
     sources: Source[];
     model: string;
+    difficulty?: "easy" | "medium" | "hard";
     total_tokens: number;
   };
 }

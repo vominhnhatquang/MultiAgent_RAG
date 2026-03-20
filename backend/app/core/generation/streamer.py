@@ -12,8 +12,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.core.generation.guard import StrictGuard
-from app.core.generation.intent_classifier import Intent, classify_intent
-from app.core.generation.llm_router import stream_generate
+from app.core.generation.intent_classifier import Intent, QueryDifficulty, classify_intent, classify_difficulty
+from app.core.generation.llm_router import ModelChoice, choose_model, stream_generate
 from app.core.generation.mode_switch import ModeSwitch, RouteAction
 from app.core.generation.prompt_builder import build_prompt
 from app.core.memory.memory_tiers import get_memory_tiers
@@ -71,20 +71,24 @@ async def stream_chat(
 
     # Step 2: Classify intent
     intent = classify_intent(message)
-    log.debug("streamer.intent", intent=intent.value)
+    difficulty = classify_difficulty(message, intent)
+    model_choice = choose_model(difficulty=difficulty.value)
+    log.debug("streamer.intent", intent=intent.value, difficulty=difficulty.value,
+              model=model_choice.display_name)
 
     # SSE: session event (metadata for frontend)
     yield _sse("session", {
         "session_id": str(session_id),
-        "model": settings.ollama_chat_model,
+        "model": model_choice.display_name,
         "mode": mode,
         "intent": intent.value,
+        "difficulty": difficulty.value,
     })
 
     # Step 3: Handle chit-chat (no retrieval needed)
     if intent == Intent.CHIT_CHAT:
         async for event in _handle_chit_chat(
-            session_id, message, mode, history, mode_switch, db_session, log
+            session_id, message, mode, history, mode_switch, model_choice, db_session, log
         ):
             yield event
         return
@@ -123,14 +127,16 @@ async def stream_chat(
         })
         # Still save user message
         await _save_messages(
-            session_id, message, decision.message, [], mode, db_session
+            session_id, message, decision.message, [], mode,
+            model_choice.display_name, difficulty.value, db_session
         )
         return
 
     if decision.action == RouteAction.LLM_WITHOUT_CONTEXT:
         # General mode fallback - use LLM without context
         async for event in _handle_llm_without_context(
-            session_id, message, mode, history, decision, db_session, log
+            session_id, message, mode, history, decision, model_choice,
+            difficulty, db_session, log
         ):
             yield event
         return
@@ -162,7 +168,7 @@ async def stream_chat(
     # Step 8: Stream tokens
     full_response: list[str] = []
     try:
-        async for token in stream_generate(prompt, mode):
+        async for token in stream_generate(prompt, mode, model_choice=model_choice):
             full_response.append(token)
             yield _sse("token", {"content": token, "done": False})
     except Exception as exc:
@@ -174,8 +180,9 @@ async def stream_chat(
     yield _sse("done", {
         "content": "",
         "done": True,
-        "sources": sources,  # Already built above
-        "model": settings.ollama_chat_model,
+        "sources": sources,
+        "model": model_choice.display_name,
+        "difficulty": difficulty.value,
         "total_tokens": total_tokens,
         "debug": {
             "hyde_used": retrieval_result.debug.get("hyde_answer") is not None,
@@ -186,7 +193,8 @@ async def stream_chat(
     # Step 9: Save messages + update memory tiers
     assistant_content = "".join(full_response)
     await _save_messages(
-        session_id, message, assistant_content, sources, mode, db_session
+        session_id, message, assistant_content, sources, mode,
+        model_choice.display_name, difficulty.value, db_session
     )
 
     # Update hot tier with new messages
@@ -220,6 +228,7 @@ async def _handle_chit_chat(
     mode: str,
     history: list[dict],
     mode_switch: ModeSwitch,
+    model_choice: ModelChoice,
     db_session: AsyncSession,
     log,
 ) -> AsyncGenerator[str, None]:
@@ -234,11 +243,13 @@ async def _handle_chit_chat(
             "content": "",
             "done": True,
             "sources": [],
-            "model": "template",
+            "model": "Template",
+            "difficulty": "easy",
             "total_tokens": 0,
         })
         await _save_messages(
-            session_id, message, template_response, [], mode, db_session
+            session_id, message, template_response, [], mode,
+            "Template", "easy", db_session
         )
     else:
         # Use LLM with guided prompt
@@ -251,7 +262,7 @@ async def _handle_chit_chat(
 
         full_response: list[str] = []
         try:
-            async for token in stream_generate(prompt, mode):
+            async for token in stream_generate(prompt, mode, model_choice=model_choice):
                 full_response.append(token)
                 yield _sse("token", {"content": token, "done": False})
         except Exception as exc:
@@ -263,11 +274,13 @@ async def _handle_chit_chat(
             "content": "",
             "done": True,
             "sources": [],
-            "model": settings.ollama_chat_model,
+            "model": model_choice.display_name,
+            "difficulty": "easy",
             "total_tokens": sum(len(t.split()) for t in full_response),
         })
         await _save_messages(
-            session_id, message, "".join(full_response), [], mode, db_session
+            session_id, message, "".join(full_response), [], mode,
+            model_choice.display_name, "easy", db_session
         )
 
 
@@ -277,6 +290,8 @@ async def _handle_llm_without_context(
     mode: str,
     history: list[dict],
     decision,
+    model_choice: ModelChoice,
+    difficulty: QueryDifficulty,
     db_session: AsyncSession,
     log,
 ) -> AsyncGenerator[str, None]:
@@ -290,7 +305,7 @@ async def _handle_llm_without_context(
 
     full_response: list[str] = []
     try:
-        async for token in stream_generate(prompt, mode):
+        async for token in stream_generate(prompt, mode, model_choice=model_choice):
             full_response.append(token)
             yield _sse("token", {"content": token, "done": False})
     except Exception as exc:
@@ -302,12 +317,14 @@ async def _handle_llm_without_context(
         "content": "",
         "done": True,
         "sources": [],
-        "model": settings.ollama_chat_model,
+        "model": model_choice.display_name,
+        "difficulty": difficulty.value,
         "total_tokens": sum(len(t.split()) for t in full_response),
         "disclaimer": decision.disclaimer,
     })
     await _save_messages(
-        session_id, message, "".join(full_response), [], mode, db_session
+        session_id, message, "".join(full_response), [], mode,
+        model_choice.display_name, difficulty.value, db_session
     )
 
 
@@ -317,6 +334,8 @@ async def _save_messages(
     assistant_content: str,
     sources: list,
     mode: str,
+    model_used: str,
+    difficulty: str,
     db_session: AsyncSession,
 ) -> None:
     """Persist user and assistant messages to database."""
@@ -330,7 +349,7 @@ async def _save_messages(
         role="assistant",
         content=assistant_content,
         sources=sources if sources else None,
-        model_used=settings.ollama_chat_model,
+        model_used=model_used,
     )
     db_session.add(user_msg)
     db_session.add(assistant_msg)

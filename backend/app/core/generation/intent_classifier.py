@@ -18,6 +18,12 @@ class Intent(StrEnum):
     GENERAL = "chit_chat"
 
 
+class QueryDifficulty(StrEnum):
+    EASY = "easy"
+    MEDIUM = "medium"
+    HARD = "hard"
+
+
 # Patterns that clearly indicate chit-chat (greetings, farewells, etc.)
 CHIT_CHAT_PATTERNS = [
     r"^(hi|hello|hey|xin chào|chào|ê|yo)[\s!?.]*$",
@@ -122,3 +128,59 @@ def classify_intent(message: str) -> Intent:
         Intent enum value
     """
     return get_intent_classifier().classify(message)
+
+
+# ── Query Difficulty Classification ──────────────────────────────────
+
+HARD_KEYWORDS = [
+    # Analysis / synthesis
+    "phân tích", "analyze", "analysis", "tổng hợp", "synthesize", "synthesis",
+    "so sánh", "compare", "comparison", "khác nhau", "difference",
+    "đánh giá", "evaluate", "evaluation", "tóm tắt", "summarize", "summary",
+    # Multi-document / deep reasoning
+    "tất cả tài liệu", "all documents", "toàn bộ", "overall", "across",
+    "liên quan", "correlation", "mối quan hệ", "relationship",
+    "xu hướng", "trend", "dự đoán", "predict", "forecast",
+    # Complex instructions
+    "giải thích chi tiết", "explain in detail", "step by step",
+    "từng bước", "ưu nhược điểm", "pros and cons", "trade-off",
+]
+
+EASY_KEYWORDS = [
+    "là gì", "what is", "định nghĩa", "definition",
+    "có bao nhiêu", "how many", "khi nào", "when",
+    "ở đâu", "where", "ai là", "who is",
+]
+
+
+def classify_difficulty(query: str, intent: Intent) -> QueryDifficulty:
+    """
+    Classify query difficulty to decide LLM routing.
+
+    Rules:
+        - chit_chat intent → always EASY
+        - Hard keywords present → HARD
+        - Long query (>25 words) without easy keywords → HARD
+        - Easy keywords or short query → EASY
+        - Everything else → MEDIUM
+    """
+    if intent == Intent.CHIT_CHAT:
+        return QueryDifficulty.EASY
+
+    q_lower = query.lower().strip()
+    words = q_lower.split()
+    word_count = len(words)
+
+    has_hard = any(kw in q_lower for kw in HARD_KEYWORDS)
+    has_easy = any(kw in q_lower for kw in EASY_KEYWORDS)
+
+    if has_hard:
+        return QueryDifficulty.HARD
+
+    if word_count > 25 and not has_easy:
+        return QueryDifficulty.HARD
+
+    if has_easy or word_count <= 8:
+        return QueryDifficulty.EASY
+
+    return QueryDifficulty.MEDIUM

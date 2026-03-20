@@ -23,8 +23,15 @@ services:
       - "8000:8000"
     environment:
       - DATABASE_URL=${DATABASE_URL}
+      - POSTGRES_HOST=${PG_HOST:-postgres}
+      - POSTGRES_PORT=${PG_PORT:-5432}
+      - POSTGRES_USER=${PG_USER:-raguser}
+      - POSTGRES_PASSWORD=${PG_PASSWORD:-ragpass}
+      - POSTGRES_DB=${PG_DB:-ragdb}
       - REDIS_URL=${REDIS_URL}
+      - REDIS_HOST=redis
       - QDRANT_URL=${QDRANT_URL}
+      - QDRANT_HOST=qdrant
       - OLLAMA_BASE_URL=${OLLAMA_BASE_URL}
       - OLLAMA_CHAT_MODEL=${OLLAMA_CHAT_MODEL:-gemma2:2b}
       - OLLAMA_EMBED_MODEL=${OLLAMA_EMBED_MODEL:-nomic-embed-text}
@@ -42,6 +49,8 @@ services:
         condition: service_healthy
     networks:
       - rag_network
+    volumes:
+      - upload_data:/app/data/uploads
     logging: *default-logging
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
@@ -59,14 +68,21 @@ services:
     image: rag-chatbot/backend:latest
     container_name: rag_celery
     restart: unless-stopped
-    mem_limit: 200m
-    memswap_limit: 200m
+    mem_limit: 500m
+    memswap_limit: 500m
     oom_kill_disable: false
-    command: celery -A app.celery_app worker --loglevel=info --concurrency=2
+    command: celery -A app.celery_app worker --loglevel=info --concurrency=1
     environment:
       - DATABASE_URL=${DATABASE_URL}
+      - POSTGRES_HOST=${PG_HOST:-postgres}
+      - POSTGRES_PORT=${PG_PORT:-5432}
+      - POSTGRES_USER=${PG_USER:-raguser}
+      - POSTGRES_PASSWORD=${PG_PASSWORD:-ragpass}
+      - POSTGRES_DB=${PG_DB:-ragdb}
       - REDIS_URL=${REDIS_URL}
+      - REDIS_HOST=redis
       - QDRANT_URL=${QDRANT_URL}
+      - QDRANT_HOST=qdrant
       - OLLAMA_BASE_URL=${OLLAMA_BASE_URL}
       - OLLAMA_CHAT_MODEL=${OLLAMA_CHAT_MODEL:-gemma2:2b}
       - OLLAMA_EMBED_MODEL=${OLLAMA_EMBED_MODEL:-nomic-embed-text}
@@ -82,6 +98,8 @@ services:
         condition: service_healthy
     networks:
       - rag_network
+    volumes:
+      - upload_data:/app/data/uploads
     logging: *default-logging
     healthcheck:
       test: ["CMD-SHELL", "celery -A app.celery_app inspect ping -d celery@$$HOSTNAME --timeout 5 > /dev/null 2>&1 || exit 1"]
@@ -135,7 +153,13 @@ services:
     command: celery -A app.celery_app beat --loglevel=info --schedule=/tmp/celerybeat-schedule
     environment:
       - DATABASE_URL=${DATABASE_URL}
+      - POSTGRES_HOST=${PG_HOST:-postgres}
+      - POSTGRES_PORT=${PG_PORT:-5432}
+      - POSTGRES_USER=${PG_USER:-raguser}
+      - POSTGRES_PASSWORD=${PG_PASSWORD:-ragpass}
+      - POSTGRES_DB=${PG_DB:-ragdb}
       - REDIS_URL=${REDIS_URL}
+      - REDIS_HOST=redis
       - CELERY_BROKER_URL=${CELERY_BROKER_URL:-redis://redis:6379/1}
       - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND:-redis://redis:6379/2}
       - SECRET_KEY=${SECRET_KEY}
@@ -193,7 +217,7 @@ services:
 
   # ─── Qdrant Vector DB ──────────────────────────────────────────────────────
   qdrant:
-    image: qdrant/qdrant:v1.9.0
+    image: qdrant/qdrant:v1.17.0
     container_name: rag_qdrant
     restart: unless-stopped
     mem_limit: 800m
@@ -275,6 +299,8 @@ volumes:
   redis_data:
     driver: local
   ollama_data:
+    driver: local
+  upload_data:
     driver: local
 
 networks:

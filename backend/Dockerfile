@@ -14,29 +14,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Install uv for fast dependency management
 RUN pip install --no-cache-dir uv
 
-# Copy dependency files
-COPY pyproject.toml .
-COPY alembic.ini .
+# Copy full source (needed by pyproject.toml install)
+COPY . .
 
-# Create virtual environment and install dependencies from pyproject.toml
+# Create virtual environment and install all deps from pyproject.toml
 RUN uv venv /opt/venv && \
     . /opt/venv/bin/activate && \
-    uv pip install --no-cache \
-      "fastapi>=0.111.0" \
-      "uvicorn[standard]>=0.29.0" \
-      "sqlalchemy[asyncio]>=2.0.0" \
-      "asyncpg>=0.29.0" \
-      "alembic>=1.13.0" \
-      "redis>=5.0.0" \
-      "celery[redis]>=5.3.0" \
-      "httpx>=0.27.0" \
-      "pydantic>=2.7.0" \
-      "pydantic-settings>=2.2.0" \
-      "python-multipart>=0.0.9" \
-      "qdrant-client>=1.9.0" \
-      "python-jose[cryptography]>=3.3.0" \
-      "passlib[bcrypt]>=1.7.4" \
-      "psutil>=5.9.0"
+    uv pip install --no-cache .
 
 # ─── Stage 2: Runner ──────────────────────────────────────────────────────────
 FROM python:3.12-slim AS runner

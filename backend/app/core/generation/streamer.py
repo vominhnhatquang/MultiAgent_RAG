@@ -22,8 +22,8 @@ from app.db.models.session import Message, Session
 
 logger = structlog.get_logger(__name__)
 
-# Guard threshold for strict mode
-GUARD_THRESHOLD = 0.7
+# Guard threshold for strict mode (cosine similarity range when reranker unavailable)
+GUARD_THRESHOLD = 0.4
 
 
 def _sse(event: str, data: dict) -> str:

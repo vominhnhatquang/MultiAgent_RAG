@@ -71,14 +71,14 @@ class BM25Search:
             JOIN documents d ON c.document_id = d.id
             WHERE d.status = 'indexed'
               AND to_tsvector('simple', c.content) @@ plainto_tsquery('simple', :query)
-              AND (:doc_filter IS NULL OR c.document_id = :doc_filter)
+              AND (CAST(:doc_filter AS uuid) IS NULL OR c.document_id = CAST(:doc_filter AS uuid))
             ORDER BY score DESC
             LIMIT :limit
         """)
 
         result = await self.session.execute(
             sql,
-            {"query": query, "limit": limit, "doc_filter": doc_filter},
+            {"query": query, "limit": limit, "doc_filter": str(doc_filter) if doc_filter else None},
         )
         rows = result.fetchall()
 

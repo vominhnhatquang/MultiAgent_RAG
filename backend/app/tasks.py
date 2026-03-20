@@ -64,8 +64,10 @@ def ingest_document(self, doc_id: str, file_path: str) -> dict:
 
 async def _run_ingest_async(doc_id: str, file_path: str) -> dict:
     """Run ingestion pipeline asynchronously."""
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
+    from app.config import settings
     from app.core.ingestion.pipeline import run_ingestion
-    from app.db.postgres import AsyncSessionLocal
 
     file_path = Path(file_path)
     if not file_path.exists():
@@ -78,13 +80,31 @@ async def _run_ingest_async(doc_id: str, file_path: str) -> dict:
     if "_" in filename:
         filename = filename.split("_", 1)[1]
 
-    async with AsyncSessionLocal() as session:
-        chunk_count = await run_ingestion(
-            doc_id=uuid.UUID(doc_id),
-            file_bytes=file_bytes,
-            filename=filename,
-            session=session,
-        )
+    # Create a fresh engine per task to avoid event loop conflicts in Celery
+    task_engine = create_async_engine(
+        settings.postgres_dsn,
+        pool_size=2,
+        max_overflow=0,
+        pool_pre_ping=True,
+    )
+    TaskSession = async_sessionmaker(
+        task_engine,
+        class_=AsyncSession,
+        expire_on_commit=False,
+        autocommit=False,
+        autoflush=False,
+    )
+
+    try:
+        async with TaskSession() as session:
+            chunk_count = await run_ingestion(
+                doc_id=uuid.UUID(doc_id),
+                file_bytes=file_bytes,
+                filename=filename,
+                session=session,
+            )
+    finally:
+        await task_engine.dispose()
 
     # Clean up upload file after successful ingestion
     try:
@@ -98,15 +118,23 @@ async def _run_ingest_async(doc_id: str, file_path: str) -> dict:
 
 async def _mark_document_error(doc_id: str, error_msg: str) -> None:
     """Mark document as error in database."""
-    from app.db.postgres import AsyncSessionLocal
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-    async with AsyncSessionLocal() as session:
-        await session.execute(
-            update(Document)
-            .where(Document.id == uuid.UUID(doc_id))
-            .values(status="error", error_message=error_msg[:1000])
-        )
-        await session.commit()
+    from app.config import settings
+
+    task_engine = create_async_engine(settings.postgres_dsn, pool_size=1, max_overflow=0)
+    TaskSession = async_sessionmaker(task_engine, class_=AsyncSession, expire_on_commit=False)
+
+    try:
+        async with TaskSession() as session:
+            await session.execute(
+                update(Document)
+                .where(Document.id == uuid.UUID(doc_id))
+                .values(status="error", error_message=error_msg[:1000])
+            )
+            await session.commit()
+    finally:
+        await task_engine.dispose()
 
 
 @celery_app.task(

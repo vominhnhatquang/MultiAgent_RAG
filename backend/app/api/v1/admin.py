@@ -48,15 +48,15 @@ class StatsResponse(BaseModel):
     qdrant: dict
 
 
-class MemoryService(BaseModel):
-    name: str
-    memory_mb: float
-    limit_mb: float | None = None
+class MemoryServiceInfo(BaseModel):
+    used_mb: float
+    limit_mb: float
 
 
 class MemoryResponse(BaseModel):
-    total_mb: float
-    services: list[MemoryService]
+    total_gb: float
+    used_gb: float
+    services: dict[str, MemoryServiceInfo]
 
 
 # ── Helper Functions ─────────────────────────────────────────────────────────
@@ -238,10 +238,16 @@ async def admin_stats() -> StatsResponse:
         # Chunk stats
         chunk_total = await session.execute(select(func.count()).select_from(Chunk))
 
-        # Session stats
+        # Session stats — count by tier for frontend (hot/warm/cold)
         session_total = await session.execute(select(func.count()).select_from(Session))
-        session_active = await session.execute(
+        session_hot = await session.execute(
             select(func.count()).select_from(Session).where(Session.tier == "hot")
+        )
+        session_warm = await session.execute(
+            select(func.count()).select_from(Session).where(Session.tier == "warm")
+        )
+        session_cold = await session.execute(
+            select(func.count()).select_from(Session).where(Session.tier == "cold")
         )
 
         # Message stats
@@ -255,6 +261,10 @@ async def admin_stats() -> StatsResponse:
         feedback_negative = await session.execute(
             select(func.count()).select_from(Feedback).where(Feedback.rating == "thumbs_down")
         )
+
+        # Extract scalars inside session context
+        feedback_positive_val = feedback_positive.scalar_one()
+        feedback_negative_val = feedback_negative.scalar_one()
 
     # Qdrant stats
     qdrant_stats = {"vectors": 0, "points": 0, "segments": 0}
@@ -287,6 +297,10 @@ async def admin_stats() -> StatsResponse:
     except Exception as e:
         logger.warning("admin.ollama_stats_failed", error=str(e))
 
+    # Compute satisfaction_rate
+    total_fb = feedback_positive_val + feedback_negative_val
+    satisfaction_rate = feedback_positive_val / total_fb if total_fb > 0 else 0.0
+
     return StatsResponse(
         documents={
             "total": doc_total.scalar_one(),
@@ -299,13 +313,14 @@ async def admin_stats() -> StatsResponse:
         },
         sessions={
             "total": session_total.scalar_one(),
-            "active": session_active.scalar_one(),
-            "messages": message_total.scalar_one(),
+            "hot": session_hot.scalar_one(),
+            "warm": session_warm.scalar_one(),
+            "cold": session_cold.scalar_one(),
         },
         feedback={
-            "total": feedback_total.scalar_one(),
-            "positive": feedback_positive.scalar_one(),
-            "negative": feedback_negative.scalar_one(),
+            "thumbs_up": feedback_positive_val,
+            "thumbs_down": feedback_negative_val,
+            "satisfaction_rate": round(satisfaction_rate, 2),
         },
         models=models,
         qdrant=qdrant_stats,
@@ -318,7 +333,7 @@ async def admin_memory() -> MemoryResponse:
     Memory usage breakdown per service.
 
     Returns:
-        Memory usage in MB for each tracked service.
+        Memory usage in GB (total/used) and per-service breakdown in MB.
     """
     # Memory budgets from infra/monitoring/check_ram.py
     memory_budgets = {
@@ -327,81 +342,88 @@ async def admin_memory() -> MemoryResponse:
         "qdrant": 1024,
         "ollama": 6144,
         "backend": 512,
-        "celery_worker": 512,
-        "celery_beat": 100,
         "frontend": 150,
     }
 
-    services = []
-    total_mb = 0.0
+    services: dict[str, MemoryServiceInfo] = {}
+    total_used_mb = 0.0
 
-    # Try to get actual memory from Redis info (for Redis itself)
+    # Redis
     try:
         redis = get_redis()
         info = await redis.info("memory")
         redis_mb = info.get("used_memory", 0) / (1024 * 1024)
-        services.append(MemoryService(name="redis", memory_mb=round(redis_mb, 2), limit_mb=memory_budgets["redis"]))
-        total_mb += redis_mb
+        services["redis"] = MemoryServiceInfo(used_mb=round(redis_mb, 2), limit_mb=memory_budgets["redis"])
+        total_used_mb += redis_mb
     except Exception:
-        services.append(MemoryService(name="redis", memory_mb=0, limit_mb=memory_budgets["redis"]))
+        services["redis"] = MemoryServiceInfo(used_mb=0, limit_mb=memory_budgets["redis"])
 
-    # Try to get Qdrant memory from collection info
+    # Qdrant
     try:
         qdrant = get_qdrant()
         collection_info = await qdrant.get_collection(settings.qdrant_collection)
-        # Estimate memory from vectors (rough: 768 dims * 4 bytes * count)
         vectors = collection_info.vectors_count or 0
         qdrant_mb = (vectors * 768 * 4) / (1024 * 1024)
-        services.append(MemoryService(name="qdrant", memory_mb=round(qdrant_mb, 2), limit_mb=memory_budgets["qdrant"]))
-        total_mb += qdrant_mb
+        services["qdrant"] = MemoryServiceInfo(used_mb=round(qdrant_mb, 2), limit_mb=memory_budgets["qdrant"])
+        total_used_mb += qdrant_mb
     except Exception:
-        services.append(MemoryService(name="qdrant", memory_mb=0, limit_mb=memory_budgets["qdrant"]))
+        services["qdrant"] = MemoryServiceInfo(used_mb=0, limit_mb=memory_budgets["qdrant"])
 
-    # PostgreSQL - estimate from table sizes (not actual memory)
+    # PostgreSQL
     try:
         async with AsyncSessionLocal() as session:
             result = await session.execute(text("""
                 SELECT pg_database_size(current_database()) / (1024 * 1024) as size_mb
             """))
             pg_mb = result.scalar_one() or 0
-            services.append(MemoryService(name="postgres", memory_mb=round(float(pg_mb), 2), limit_mb=memory_budgets["postgres"]))
-            total_mb += float(pg_mb)
+            services["postgres"] = MemoryServiceInfo(used_mb=round(float(pg_mb), 2), limit_mb=memory_budgets["postgres"])
+            total_used_mb += float(pg_mb)
     except Exception:
-        services.append(MemoryService(name="postgres", memory_mb=0, limit_mb=memory_budgets["postgres"]))
+        services["postgres"] = MemoryServiceInfo(used_mb=0, limit_mb=memory_budgets["postgres"])
 
-    # Ollama - estimate based on loaded models
+    # Ollama
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
             ps_resp = await client.get(f"{settings.ollama_base_url}/api/ps")
             if ps_resp.status_code == 200:
                 ps_data = ps_resp.json()
                 loaded_models = ps_data.get("models", [])
-                # Sum up VRAM/RAM usage from model info
                 ollama_mb = sum(m.get("size", 0) / (1024 * 1024) for m in loaded_models)
-                services.append(MemoryService(name="ollama", memory_mb=round(ollama_mb, 2), limit_mb=memory_budgets["ollama"]))
-                total_mb += ollama_mb
+                services["ollama"] = MemoryServiceInfo(used_mb=round(ollama_mb, 2), limit_mb=memory_budgets["ollama"])
+                total_used_mb += ollama_mb
             else:
-                services.append(MemoryService(name="ollama", memory_mb=0, limit_mb=memory_budgets["ollama"]))
+                services["ollama"] = MemoryServiceInfo(used_mb=0, limit_mb=memory_budgets["ollama"])
     except Exception:
-        services.append(MemoryService(name="ollama", memory_mb=0, limit_mb=memory_budgets["ollama"]))
+        services["ollama"] = MemoryServiceInfo(used_mb=0, limit_mb=memory_budgets["ollama"])
 
-    # Backend process - try cgroup first (accurate in container), fallback to estimate
+    # Backend process
     cgroup_mem = _get_cgroup_memory_bytes()
     cgroup_limit = _get_cgroup_memory_limit_bytes()
     if cgroup_mem is not None:
         backend_mb = cgroup_mem / (1024 * 1024)
         backend_limit = cgroup_limit / (1024 * 1024) if cgroup_limit else memory_budgets["backend"]
-        services.append(MemoryService(name="backend", memory_mb=round(backend_mb, 2), limit_mb=round(backend_limit, 2)))
-        total_mb += backend_mb
+        services["backend"] = MemoryServiceInfo(used_mb=round(backend_mb, 2), limit_mb=round(backend_limit, 2))
+        total_used_mb += backend_mb
     else:
-        # Fallback to psutil for non-container environments
-        import psutil
-        process = psutil.Process()
-        backend_mb = process.memory_info().rss / (1024 * 1024)
-        services.append(MemoryService(name="backend", memory_mb=round(backend_mb, 2), limit_mb=memory_budgets["backend"]))
-        total_mb += backend_mb
+        try:
+            import psutil
+            process = psutil.Process()
+            backend_mb = process.memory_info().rss / (1024 * 1024)
+            services["backend"] = MemoryServiceInfo(used_mb=round(backend_mb, 2), limit_mb=memory_budgets["backend"])
+            total_used_mb += backend_mb
+        except Exception:
+            services["backend"] = MemoryServiceInfo(used_mb=0, limit_mb=memory_budgets["backend"])
 
-    return MemoryResponse(total_mb=round(total_mb, 2), services=services)
+    # Frontend — not accessible from backend, report budget only
+    services["frontend"] = MemoryServiceInfo(used_mb=0, limit_mb=memory_budgets["frontend"])
+
+    total_budget_mb = sum(memory_budgets.values())
+
+    return MemoryResponse(
+        total_gb=round(total_budget_mb / 1024, 2),
+        used_gb=round(total_used_mb / 1024, 2),
+        services=services,
+    )
 
 
 @router.get("/api/v1/metrics", response_class=Response)

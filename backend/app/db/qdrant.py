@@ -4,7 +4,6 @@ from qdrant_client.models import (
     Distance,
     HnswConfigDiff,
     PayloadSchemaType,
-    QuantizationConfig,
     ScalarQuantization,
     ScalarQuantizationConfig,
     ScalarType,
@@ -45,14 +44,12 @@ async def _ensure_collection() -> None:
             hnsw_config=HnswConfigDiff(m=16, ef_construct=128),
         )
         if not settings.dev_mode:
-            # Quantization not supported by in-memory client
-            create_kwargs["quantization_config"] = QuantizationConfig(
-                scalar=ScalarQuantization(
-                    scalar=ScalarQuantizationConfig(
-                        type=ScalarType.INT8,
-                        quantile=0.99,
-                        always_ram=True,
-                    )
+            # Pass ScalarQuantization directly (QuantizationConfig is a Union type in client 1.17+)
+            create_kwargs["quantization_config"] = ScalarQuantization(
+                scalar=ScalarQuantizationConfig(
+                    type=ScalarType.INT8,
+                    quantile=0.99,
+                    always_ram=True,
                 )
             )
             create_kwargs["on_disk_payload"] = True
@@ -82,7 +79,27 @@ async def close_qdrant() -> None:
     logger.info("qdrant.closed")
 
 
-def get_qdrant() -> AsyncQdrantClient:
+async def get_qdrant_async() -> AsyncQdrantClient:
+    """Get or lazily initialize the Qdrant client (works in both FastAPI and Celery)."""
+    global _qdrant_client
     if _qdrant_client is None:
-        raise RuntimeError("Qdrant client not initialized")
+        await init_qdrant()
     return _qdrant_client
+
+
+def get_qdrant() -> AsyncQdrantClient:
+    """Get the Qdrant client (must be initialized first via init_qdrant or get_qdrant_async)."""
+    if _qdrant_client is None:
+        raise RuntimeError("Qdrant client not initialized — use get_qdrant_async() instead")
+    return _qdrant_client
+
+
+def create_qdrant_client() -> AsyncQdrantClient:
+    """Create a fresh AsyncQdrantClient (for Celery workers that run in isolated event loops)."""
+    if settings.dev_mode:
+        return AsyncQdrantClient(":memory:")
+    return AsyncQdrantClient(
+        host=settings.qdrant_host,
+        port=settings.qdrant_port,
+        timeout=30,
+    )

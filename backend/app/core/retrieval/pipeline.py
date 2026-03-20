@@ -139,10 +139,11 @@ class RetrievalPipeline:
         if self.use_reranker and self.reranker.is_available():
             reranked = self.reranker.rerank(query, candidates, top_k=top_k)
         else:
-            # No reranking, just take top-k by RRF score
+            # No reranking — use vector cosine similarity score (0-1 range)
+            # instead of RRF score (~0.01-0.03) which would always fail the guard
             reranked = candidates[:top_k]
             for chunk in reranked:
-                chunk.rerank_score = chunk.rrf_score or chunk.score
+                chunk.rerank_score = chunk.vector_score or chunk.rrf_score or chunk.score
 
         # Format sources
         sources = [

@@ -79,13 +79,14 @@ class VectorSearch:
                 ]
             )
 
-        results = await qdrant.search(
+        response = await qdrant.query_points(
             collection_name=settings.qdrant_collection,
-            query_vector=vector,
+            query=vector,
             limit=limit,
             query_filter=query_filter,
             with_payload=True,
         )
+        results = response.points
 
         chunks = []
         for hit in results:

@@ -13,7 +13,7 @@ from app.core.ingestion.enricher import enrich
 from app.core.ingestion.extractor import extract
 from app.core.ingestion.indexer import index
 from app.db.models.document import Document
-from app.exceptions import AppError, DuplicateError
+from app.exceptions import AppError
 
 logger = structlog.get_logger(__name__)
 

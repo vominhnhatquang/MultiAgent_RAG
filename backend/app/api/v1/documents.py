@@ -19,6 +19,7 @@ from app.exceptions import (
     UnsupportedFileTypeError,
     ValidationError,
 )
+from app.tasks import ingest_document, save_upload_file
 
 router = APIRouter(prefix="/documents", tags=["documents"])
 
@@ -75,6 +76,7 @@ class DeleteResponse(BaseModel):
 async def upload_document(
     file: UploadFile = File(...),
     session: AsyncSession = Depends(get_session),
+    async_mode: bool = Query(True, description="Use async Celery ingestion"),
 ) -> DocumentUploadResponse:
     if not file.filename:
         raise ValidationError("No file provided", "MISSING_FILE").to_http()
@@ -91,27 +93,35 @@ async def upload_document(
     if await check_duplicate(file_hash, session):
         raise DuplicateError("A document with the same content already exists", "DUPLICATE_FILE").to_http()
 
+    # Create document record with "queued" status for async, "processing" for sync
+    initial_status = "queued" if async_mode else "processing"
     doc = Document(
         filename=file.filename,
         file_type=ext,
         file_size_bytes=len(file_bytes),
         file_hash=file_hash,
-        status="processing",
+        status=initial_status,
     )
     session.add(doc)
     await session.flush()
     doc_id = doc.id
     created_at = doc.created_at
 
-    # Phase 1: sync ingestion (no Celery)
-    await run_ingestion(doc_id, file_bytes, file.filename, session)
+    if async_mode:
+        # Save file to disk and dispatch Celery task
+        file_path = save_upload_file(doc_id, file.filename, file_bytes)
+        ingest_document.delay(str(doc_id), str(file_path))
+        await session.commit()
+    else:
+        # Sync ingestion (backward compatible)
+        await run_ingestion(doc_id, file_bytes, file.filename, session)
 
     return DocumentUploadResponse(
         doc_id=doc_id,
         filename=file.filename,
         file_type=ext,
         file_size_bytes=len(file_bytes),
-        status="processing",
+        status=initial_status,
         created_at=created_at,
     )
 

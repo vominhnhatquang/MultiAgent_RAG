@@ -1,32 +1,53 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useState, useRef } from "react";
 import { sendMessage } from "@/lib/api";
-import { readSSEStream } from "@/lib/sse";
+import { streamChat } from "@/lib/sse";
 import type { Message, Source } from "@/types";
 
 interface UseChatReturn {
   messages: Message[];
   isStreaming: boolean;
   streamingContent: string;
+  streamingSources: Source[];
   error: string | null;
-  sendMessage: (content: string, sessionId: string | null) => Promise<string | null>;
+  abortController: AbortController | null;
+  sendMessage: (content: string, sessionId: string | null, mode: "strict" | "general") => Promise<string | null>;
   setMessages: React.Dispatch<React.SetStateAction<Message[]>>;
+  abortStream: () => void;
   clearError: () => void;
+  clearMessages: () => void;
 }
 
 export function useChat(): UseChatReturn {
   const [messages, setMessages] = useState<Message[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [streamingContent, setStreamingContent] = useState("");
+  const [streamingSources, setStreamingSources] = useState<Source[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   const clearError = useCallback(() => {
     setError(null);
   }, []);
 
+  const clearMessages = useCallback(() => {
+    setMessages([]);
+    setStreamingContent("");
+    setStreamingSources([]);
+    setError(null);
+  }, []);
+
+  const abortStream = useCallback(() => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+    setIsStreaming(false);
+  }, []);
+
   const handleSendMessage = useCallback(
-    async (content: string, sessionId: string | null): Promise<string | null> => {
+    async (content: string, sessionId: string | null, mode: "strict" | "general"): Promise<string | null> => {
       if (!content.trim()) {
         setError("Message cannot be empty");
         return null;
@@ -35,6 +56,7 @@ export function useChat(): UseChatReturn {
       setError(null);
       setIsStreaming(true);
       setStreamingContent("");
+      setStreamingSources([]);
 
       // Add user message immediately
       const userMessage: Message = {
@@ -42,6 +64,7 @@ export function useChat(): UseChatReturn {
         role: "user",
         content: content.trim(),
         created_at: new Date().toISOString(),
+        timestamp: new Date().toISOString(),
       };
       setMessages((prev) => [...prev, userMessage]);
 
@@ -49,51 +72,83 @@ export function useChat(): UseChatReturn {
       let assistantContent = "";
       let assistantSources: Source[] = [];
       let assistantModel = "";
+      let messageId = "";
+
+      // Create new abort controller for this request
+      abortControllerRef.current = new AbortController();
 
       try {
-        const response = await sendMessage(content.trim(), sessionId, "strict");
-
-        await readSSEStream(response, {
-          onMeta: (data) => {
-            newSessionId = data.sessionId;
+        await streamChat(
+          content.trim(),
+          sessionId,
+          mode,
+          {
+            onSession: (data) => {
+              newSessionId = data.sessionId;
+            },
+            onSources: (data) => {
+              assistantSources = data.sources;
+              setStreamingSources(data.sources);
+            },
+            onToken: (token) => {
+              assistantContent += token;
+              setStreamingContent(assistantContent);
+            },
+            onDone: (data) => {
+              assistantModel = data.model;
+              messageId = data.messageId;
+            },
+            onNoData: (data) => {
+              assistantContent = data.message;
+              setStreamingContent(assistantContent);
+            },
+            onError: (err) => {
+              setError(err.message);
+            },
           },
-          onToken: (token) => {
-            assistantContent += token;
-            setStreamingContent(assistantContent);
-          },
-          onDone: (data) => {
-            assistantSources = data.sources;
-            assistantModel = data.model;
-          },
-          onNoData: (data) => {
-            assistantContent = data.message;
-            setStreamingContent(assistantContent);
-          },
-          onError: (err) => {
-            setError(err.message);
-          },
-        });
+          abortControllerRef.current.signal
+        );
 
         // Add assistant message
         const assistantMessage: Message = {
-          id: `assistant-${Date.now()}`,
+          id: messageId || `assistant-${Date.now()}`,
           role: "assistant",
           content: assistantContent,
           created_at: new Date().toISOString(),
-          sources: assistantSources,
-          model_used: assistantModel,
+          timestamp: new Date().toISOString(),
+          sources: assistantSources.length > 0 ? assistantSources : undefined,
+          model: assistantModel || undefined,
         };
 
         setMessages((prev) => [...prev, assistantMessage]);
         setStreamingContent("");
+        setStreamingSources([]);
 
         return newSessionId;
       } catch (err) {
+        if (err instanceof Error && err.name === "AbortError") {
+          // User aborted - add partial message
+          if (assistantContent) {
+            const assistantMessage: Message = {
+              id: `assistant-${Date.now()}`,
+              role: "assistant",
+              content: assistantContent + "\n\n_[Stopped by user]_",
+              created_at: new Date().toISOString(),
+              timestamp: new Date().toISOString(),
+              sources: assistantSources.length > 0 ? assistantSources : undefined,
+              model: assistantModel || undefined,
+            };
+            setMessages((prev) => [...prev, assistantMessage]);
+          }
+          return newSessionId;
+        }
+        
         const errorMessage = err instanceof Error ? err.message : "Failed to send message";
         setError(errorMessage);
         return null;
       } finally {
         setIsStreaming(false);
+        abortControllerRef.current = null;
       }
     },
     []
@@ -103,9 +158,13 @@ export function useChat(): UseChatReturn {
     messages,
     isStreaming,
     streamingContent,
+    streamingSources,
     error,
+    abortController: abortControllerRef.current,
     sendMessage: handleSendMessage,
     setMessages,
+    abortStream,
     clearError,
+    clearMessages,
   };
 }

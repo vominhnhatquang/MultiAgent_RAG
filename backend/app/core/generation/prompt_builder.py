@@ -1,20 +1,25 @@
-"""Build LLM prompts from retrieved context + chat history."""
+"""Build LLM prompts from retrieved context + chat history.
+
+Phase 2: "Lost in the Middle" aware — top chunks at beginning and end.
+"""
 from dataclasses import dataclass
 
 import structlog
 
+from app.core.retrieval.bm25_search import ScoredChunk
+
 logger = structlog.get_logger(__name__)
 
-_SYSTEM_STRICT = (
-    "Bạn là trợ lý AI. Chỉ trả lời dựa trên ngữ cảnh tài liệu được cung cấp. "
-    "Nếu câu trả lời không có trong tài liệu, hãy nói rõ điều đó. "
-    "Trả lời bằng ngôn ngữ mà người dùng sử dụng."
-)
-_SYSTEM_GENERAL = (
-    "Bạn là trợ lý AI hữu ích. "
-    "Ưu tiên sử dụng ngữ cảnh tài liệu khi có, nhưng có thể dùng kiến thức chung nếu cần. "
-    "Trả lời bằng ngôn ngữ mà người dùng sử dụng."
-)
+# System prompts for different modes
+SYSTEM_STRICT = """Bạn là trợ lý tài liệu. CHỈ trả lời dựa trên tài liệu được cung cấp. 
+Nếu không có thông tin trong tài liệu, trả lời 'Không có thông tin trong tài liệu'.
+Ghi rõ nguồn (tên file, trang số) khi trích dẫn.
+Trả lời bằng ngôn ngữ mà người dùng sử dụng."""
+
+SYSTEM_GENERAL = """Bạn là trợ lý tài liệu thông minh. 
+Ưu tiên trả lời dựa trên tài liệu. Có thể bổ sung kiến thức chung nhưng phải ghi rõ.
+Ghi rõ nguồn (tên file, trang số) khi trích dẫn từ tài liệu.
+Trả lời bằng ngôn ngữ mà người dùng sử dụng."""
 
 MAX_CONTEXT_CHARS = 6000
 MAX_HISTORY_TURNS = 3
@@ -22,45 +27,165 @@ MAX_HISTORY_TURNS = 3
 
 @dataclass
 class BuiltPrompt:
+    """Result of prompt building."""
+
     system: str
-    messages: list[dict]   # [{role, content}]
+    messages: list[dict]  # [{role, content}]
+
+
+class PromptBuilder:
+    """
+    Build prompts with "Lost in the Middle" awareness.
+
+    LLMs pay more attention to content at the BEGINNING and END of the context.
+    Strategy:
+        - Put most relevant chunk (top-1) at the beginning
+        - Put query at the very end
+        - History in between
+    """
+
+    def build(
+        self,
+        query: str,
+        chunks: list[ScoredChunk],
+        history: list[dict],
+        mode: str = "strict",
+    ) -> BuiltPrompt:
+        """
+        Build a prompt from query, chunks, and history.
+
+        Args:
+            query: User query
+            chunks: Retrieved chunks (already ranked by relevance)
+            history: Chat history [{role, content}]
+            mode: "strict" or "general"
+
+        Returns:
+            BuiltPrompt with system and messages
+        """
+        system = self._build_system(mode)
+        context = self._build_context(chunks)
+        history_text = self._build_history(history)
+
+        # Construct the user message with context
+        user_content = f"""## Tài liệu tham khảo:
+{context}
+
+## Lịch sử hội thoại:
+{history_text}
+
+## Câu hỏi hiện tại:
+{query}
+
+## Hướng dẫn trả lời:
+- Trả lời DỰA TRÊN tài liệu tham khảo ở trên
+- Ghi rõ nguồn (tên file, trang số) khi trích dẫn
+- Nếu thông tin không có trong tài liệu, nói rõ"""
+
+        messages = [{"role": "user", "content": user_content}]
+
+        logger.debug(
+            "prompt_builder.built",
+            context_chunks=len(chunks),
+            history_turns=len(history) // 2,
+            mode=mode,
+        )
+
+        return BuiltPrompt(system=system, messages=messages)
+
+    def _build_system(self, mode: str) -> str:
+        """Get system prompt for mode."""
+        return SYSTEM_STRICT if mode == "strict" else SYSTEM_GENERAL
+
+    def _build_context(self, chunks: list[ScoredChunk]) -> str:
+        """
+        Build context from chunks.
+
+        "Lost in the Middle" optimization: top-1 (most relevant) at the start.
+        """
+        if not chunks:
+            return "(Không có tài liệu tham khảo)"
+
+        parts = []
+        total_chars = 0
+
+        for i, chunk in enumerate(chunks):
+            source = f"[Nguồn: {chunk.filename or 'unknown'}, trang {chunk.page_number or '?'}]"
+            snippet = f"--- Đoạn {i + 1} {source} ---\n{chunk.content}"
+
+            if total_chars + len(snippet) > MAX_CONTEXT_CHARS:
+                break
+
+            parts.append(snippet)
+            total_chars += len(snippet)
+
+        return "\n\n".join(parts)
+
+    def _build_history(self, history: list[dict], max_turns: int = MAX_HISTORY_TURNS) -> str:
+        """Build history text from recent turns."""
+        if not history:
+            return "(Không có lịch sử)"
+
+        # Get last N turns (user + assistant pairs)
+        recent = history[-(max_turns * 2) :]
+
+        lines = []
+        for msg in recent:
+            role = "Người dùng" if msg["role"] == "user" else "Trợ lý"
+            content = msg["content"][:300]  # Truncate long messages
+            lines.append(f"{role}: {content}")
+
+        return "\n".join(lines)
+
+
+# Singleton instance
+_builder: PromptBuilder | None = None
+
+
+def get_prompt_builder() -> PromptBuilder:
+    """Get the global prompt builder instance."""
+    global _builder
+    if _builder is None:
+        _builder = PromptBuilder()
+    return _builder
 
 
 def build_prompt(
     query: str,
-    context_chunks: list[dict],   # [{"content": ..., "score": ..., "filename": ..., "page": ...}]
-    history: list[dict],          # [{role, content}] most recent last
+    context_chunks: list[dict] | list[ScoredChunk],
+    history: list[dict],
     mode: str = "strict",
 ) -> BuiltPrompt:
-    system = _SYSTEM_STRICT if mode == "strict" else _SYSTEM_GENERAL
+    """
+    Build prompt (convenience function, backward compatible).
 
-    # Build context block
-    context_parts: list[str] = []
-    total_chars = 0
-    for i, c in enumerate(context_chunks, 1):
-        snippet = f"[{i}] (from {c.get('filename','?')}, page {c.get('page','?')}):\n{c['content']}"
-        if total_chars + len(snippet) > MAX_CONTEXT_CHARS:
-            break
-        context_parts.append(snippet)
-        total_chars += len(snippet)
+    Args:
+        query: User query
+        context_chunks: Retrieved chunks (dict or ScoredChunk format)
+        history: Chat history [{role, content}]
+        mode: "strict" or "general"
 
-    context_str = "\n\n".join(context_parts)
-    if context_str:
-        context_block = f"=== TÀI LIỆU THAM KHẢO ===\n{context_str}\n=========================\n\n"
+    Returns:
+        BuiltPrompt
+    """
+    builder = get_prompt_builder()
+
+    # Convert dict chunks to ScoredChunk if needed (backward compatibility)
+    if context_chunks and isinstance(context_chunks[0], dict):
+        from uuid import uuid4
+        chunks = [
+            ScoredChunk(
+                id=uuid4(),
+                document_id=uuid4(),
+                content=c.get("content", ""),
+                page_number=c.get("page"),
+                metadata={},
+                filename=c.get("filename"),
+                score=c.get("score", 0),
+            )
+            for c in context_chunks
+        ]
     else:
-        context_block = ""
+        chunks = context_chunks
 
-    # Build messages list
-    msgs: list[dict] = []
-
-    # Recent history
-    recent = history[-(MAX_HISTORY_TURNS * 2):]
-    for turn in recent:
-        msgs.append({"role": turn["role"], "content": turn["content"]})
-
-    # Final user message with context prepended
-    user_content = f"{context_block}Câu hỏi: {query}"
-    msgs.append({"role": "user", "content": user_content})
-
-    logger.debug("prompt_builder.built", context_chunks=len(context_parts), history_turns=len(recent) // 2)
-    return BuiltPrompt(system=system, messages=msgs)
+    return builder.build(query, chunks, history, mode)

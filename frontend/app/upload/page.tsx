@@ -8,7 +8,8 @@ import { useUpload } from "@/hooks/useUpload";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
-import { ArrowLeft, FileText, Trash2 } from "lucide-react";
+import { ArrowLeft, FileText, Trash2, AlertCircle } from "lucide-react";
+import { toast } from "sonner";
 
 export default function UploadPage() {
   const {
@@ -26,6 +27,43 @@ export default function UploadPage() {
   useEffect(() => {
     fetchDocuments();
   }, [fetchDocuments]);
+
+  // Show error toast
+  useEffect(() => {
+    if (error) {
+      toast.error(error);
+    }
+  }, [error]);
+
+  const handleDrop = async (files: File[]) => {
+    const validTypes = ["application/pdf", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "text/markdown", "text/plain"];
+    const maxSize = 50 * 1024 * 1024; // 50MB
+
+    const validFiles = files.filter((file) => {
+      if (!validTypes.includes(file.type) && !file.name.endsWith('.md') && !file.name.endsWith('.txt')) {
+        toast.error(`${file.name}: Unsupported file type. Use PDF, DOCX, MD, or TXT.`);
+        return false;
+      }
+      if (file.size > maxSize) {
+        toast.error(`${file.name}: File too large. Max 50MB.`);
+        return false;
+      }
+      return true;
+    });
+
+    if (validFiles.length > 0) {
+      await uploadFiles(validFiles);
+    }
+  };
+
+  const handleDelete = async (docId: string) => {
+    try {
+      await deleteDocumentById(docId);
+      toast.success("Document deleted");
+    } catch {
+      toast.error("Failed to delete document");
+    }
+  };
 
   const formatFileSize = (bytes: number) => {
     if (bytes < 1024) return `${bytes} B`;
@@ -55,6 +93,19 @@ export default function UploadPage() {
     }
   };
 
+  const getStatusIcon = (status: string) => {
+    switch (status) {
+      case "indexed":
+        return "✅";
+      case "processing":
+        return "⏳";
+      case "error":
+        return "❌";
+      default:
+        return "📄";
+    }
+  };
+
   return (
     <div className="min-h-screen bg-background">
       {/* Header */}
@@ -71,22 +122,9 @@ export default function UploadPage() {
 
       {/* Content */}
       <main className="mx-auto max-w-5xl p-4">
-        {/* Error Alert */}
-        {error && (
-          <div className="mb-6 rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-sm text-destructive">
-            <strong>Error:</strong> {error}
-            <button
-              onClick={clearError}
-              className="ml-2 underline"
-            >
-              Dismiss
-            </button>
-          </div>
-        )}
-
         {/* Drop Zone */}
         <div className="mb-8">
-          <DropZone onFilesDrop={uploadFiles} />
+          <DropZone onFilesDrop={handleDrop} />
         </div>
 
         {/* Upload Progress */}
@@ -98,7 +136,9 @@ export default function UploadPage() {
 
         {/* Documents List */}
         <div>
-          <h2 className="mb-4 text-lg font-semibold">Uploaded Documents</h2>
+          <h2 className="mb-4 text-lg font-semibold">
+            Uploaded Documents ({documents.length})
+          </h2>
           
           {isLoading ? (
             <div className="space-y-3">
@@ -112,6 +152,9 @@ export default function UploadPage() {
               <p className="text-muted-foreground">
                 No documents uploaded yet.
               </p>
+              <p className="text-sm text-muted-foreground mt-1">
+                Upload PDF, DOCX, MD, or TXT files to get started.
+              </p>
             </div>
           ) : (
             <ScrollArea className="h-[400px] rounded-lg border">
@@ -122,7 +165,7 @@ export default function UploadPage() {
                     className="flex items-center justify-between p-4 hover:bg-muted/50"
                   >
                     <div className="flex items-center gap-3 min-w-0">
-                      <FileText className="h-8 w-8 shrink-0 text-muted-foreground" />
+                      <span className="text-2xl">{getStatusIcon(doc.status)}</span>
                       <div className="min-w-0">
                         <p className="truncate font-medium">{doc.filename}</p>
                         <div className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -137,13 +180,18 @@ export default function UploadPage() {
                         <p className="text-xs text-muted-foreground">
                           {formatDate(doc.created_at)}
                         </p>
+                        {doc.error_message && (
+                          <p className="text-xs text-destructive mt-1">
+                            Error: {doc.error_message}
+                          </p>
+                        )}
                       </div>
                     </div>
                     <Button
                       variant="ghost"
                       size="icon"
-                      onClick={() => deleteDocumentById(doc.id)}
-                      className="shrink-0"
+                      onClick={() => handleDelete(doc.id)}
+                      className="shrink-0 text-muted-foreground hover:text-destructive"
                     >
                       <Trash2 className="h-4 w-4" />
                     </Button>

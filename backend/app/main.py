@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.config import settings
+from app.core.rate_limiter import RateLimitMiddleware
 from app.db.postgres import close_db, init_db
 from app.db.qdrant import close_qdrant, init_qdrant
 from app.db.redis import close_redis, init_redis
@@ -52,6 +53,9 @@ def create_app() -> FastAPI:
         allow_headers=["Content-Type"],
     )
 
+    # Rate limiting middleware (after CORS so preflight requests work)
+    app.add_middleware(RateLimitMiddleware)
+
     @app.exception_handler(AppError)
     async def app_error_handler(request: Request, exc: AppError) -> JSONResponse:
         return JSONResponse(
@@ -59,12 +63,14 @@ def create_app() -> FastAPI:
             content={"error": exc.message, "code": exc.code},
         )
 
+    from app.api.v1.admin import router as admin_router
     from app.api.v1.chat import router as chat_router
     from app.api.v1.documents import router as documents_router
     from app.api.v1.health import router as health_router
 
     prefix = "/api/v1"
     app.include_router(health_router)
+    app.include_router(admin_router)  # Admin routes (no prefix, full path in router)
     app.include_router(documents_router, prefix=prefix)
     app.include_router(chat_router, prefix=prefix)
 

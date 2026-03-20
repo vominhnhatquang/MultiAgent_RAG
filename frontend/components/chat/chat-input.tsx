@@ -4,10 +4,11 @@ import { useState, useRef, useEffect, KeyboardEvent } from "react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { Send } from "lucide-react";
+import { Send, Square } from "lucide-react";
 
 interface ChatInputProps {
   onSend: (message: string) => void;
+  onStop?: () => void;
   isLoading?: boolean;
   disabled?: boolean;
   placeholder?: string;
@@ -15,6 +16,7 @@ interface ChatInputProps {
 
 export function ChatInput({
   onSend,
+  onStop,
   isLoading = false,
   disabled = false,
   placeholder = "Type your message...",
@@ -35,10 +37,18 @@ export function ChatInput({
     setMessage("");
   };
 
+  const handleStop = () => {
+    onStop?.();
+  };
+
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
-      handleSend();
+      if (isLoading) {
+        handleStop();
+      } else {
+        handleSend();
+      }
     }
   };
 
@@ -67,17 +77,28 @@ export function ChatInput({
             disabled && "opacity-50"
           )}
         />
-        <Button
-          onClick={handleSend}
-          disabled={!message.trim() || isLoading || disabled}
-          size="icon"
-          className="h-14 w-14 shrink-0"
-        >
-          <Send className="h-5 w-5" />
-        </Button>
+        {isLoading ? (
+          <Button
+            onClick={handleStop}
+            variant="destructive"
+            size="icon"
+            className="h-14 w-14 shrink-0"
+          >
+            <Square className="h-5 w-5 fill-current" />
+          </Button>
+        ) : (
+          <Button
+            onClick={handleSend}
+            disabled={!message.trim() || isLoading || disabled}
+            size="icon"
+            className="h-14 w-14 shrink-0"
+          >
+            <Send className="h-5 w-5" />
+          </Button>
+        )}
       </div>
       <div className="mx-auto max-w-3xl mt-2 text-center text-xs text-muted-foreground">
-        Press Enter to send, Shift+Enter for new line
+        {isLoading ? "Press Enter or click the stop button to stop" : "Press Enter to send, Shift+Enter for new line"}
       </div>
     </div>
   );

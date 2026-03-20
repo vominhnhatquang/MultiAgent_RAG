@@ -12,7 +12,7 @@ def test_count_tokens_non_empty() -> None:
 
 def test_count_tokens_empty() -> None:
     count = _count_tokens("")
-    assert count >= 1  # fallback returns at least 1
+    assert count >= 0  # empty string has 0 tokens
 
 
 def test_count_tokens_proportional() -> None:

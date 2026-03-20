@@ -110,7 +110,8 @@ main() {
     check_docker_container "Qdrant"    "rag_qdrant"
     check_docker_container "Redis"     "rag_redis"
     check_docker_container "Ollama"    "rag_ollama"
-    check_docker_container "Celery"    "rag_celery"
+    check_docker_container "Celery"       "rag_celery"
+    check_docker_container "Celery Beat"  "rag_celery_beat"
 
     echo ""
     check_ram_usage

@@ -6,6 +6,7 @@ Usage: python3 infra/monitoring/check_ram.py [--json] [--interval N]
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -14,18 +15,19 @@ from typing import Optional
 
 # Memory budgets in MB (from docker-compose.yml)
 MEMORY_BUDGETS = {
-    "rag_backend":  300,
-    "rag_frontend": 200,
-    "rag_postgres": 800,
-    "rag_qdrant":   800,
-    "rag_redis":    300,
-    "rag_ollama":   6500,
-    "rag_celery":   200,
+    "rag_backend":      700,
+    "rag_frontend":     200,
+    "rag_postgres":     800,
+    "rag_qdrant":       800,
+    "rag_redis":        300,
+    "rag_ollama":      6100,
+    "rag_celery":       200,
+    "rag_celery_beat":  100,
 }
 
-TOTAL_BUDGET_MB = 9100
-WARN_THRESHOLD_MB = 8500   # 85% of 10GB
-CRIT_THRESHOLD_MB = 9216   # 9GB — OOM imminent
+TOTAL_BUDGET_MB = 9200
+WARN_THRESHOLD_MB = 9000   # > 9GB → warning
+CRIT_THRESHOLD_MB = 9500   # > 9.5GB → webhook alert + OOM risk
 
 # ANSI colors
 GREEN  = "\033[0;32m"
@@ -126,6 +128,26 @@ def color_for_status(status: str) -> str:
     }.get(status, RESET)
 
 
+def send_alert(message: str) -> None:
+    """Send alert to Discord/Slack webhook if ALERT_WEBHOOK_URL is set."""
+    webhook_url = os.environ.get("ALERT_WEBHOOK_URL", "")
+    print(f"\n  {RED}🚨 ALERT: {message}{RESET}")
+    if not webhook_url:
+        return
+    try:
+        import urllib.request
+        payload = json.dumps({"content": message}).encode()
+        req = urllib.request.Request(
+            webhook_url,
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        urllib.request.urlopen(req, timeout=5)
+    except Exception as exc:
+        print(f"  {YELLOW}Webhook delivery failed: {exc}{RESET}", file=sys.stderr)
+
+
 def print_table(stats: list[ContainerStats]) -> int:
     """Print a formatted table. Returns exit code (0=ok, 1=warning, 2=critical)."""
     print(f"\n{BOLD}{CYAN}RAG Chatbot — RAM Monitor  [{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]{RESET}")
@@ -155,7 +177,7 @@ def print_table(stats: list[ContainerStats]) -> int:
     print()
 
     if total_used > CRIT_THRESHOLD_MB:
-        print(f"{RED}⚠ CRITICAL: Total RAM {total_used:.0f}MB > {CRIT_THRESHOLD_MB}MB — OOM risk!{RESET}")
+        send_alert(f"⚠️ RAM CRITICAL: {total_used:.0f}MB / {CRIT_THRESHOLD_MB}MB — OOM risk!")
         exit_code = 2
     elif total_used > WARN_THRESHOLD_MB:
         print(f"{YELLOW}⚠ WARNING: Total RAM {total_used:.0f}MB > {WARN_THRESHOLD_MB}MB — approaching limit.{RESET}")

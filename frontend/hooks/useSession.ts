@@ -1,8 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { deleteSession, getSession, getSessions } from "@/lib/api";
-import type { Message, Session, SessionDetail } from "@/types";
+import { api } from "@/lib/api";
+import type { Session, SessionDetail } from "@/types";
 
 interface UseSessionReturn {
   sessions: Session[];
@@ -30,7 +30,7 @@ export function useSession(): UseSessionReturn {
     setIsLoading(true);
     setError(null);
     try {
-      const response = await getSessions(1, 50);
+      const response = await api.listSessions(1, 50);
       setSessions(response.sessions);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed to fetch sessions";
@@ -44,7 +44,7 @@ export function useSession(): UseSessionReturn {
     setIsLoading(true);
     setError(null);
     try {
-      const session = await getSession(sessionId);
+      const session = await api.getSession(sessionId);
       setCurrentSession(session);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed to fetch session";
@@ -57,7 +57,7 @@ export function useSession(): UseSessionReturn {
   const deleteSessionById = useCallback(async (sessionId: string) => {
     setError(null);
     try {
-      await deleteSession(sessionId);
+      await api.deleteSession(sessionId);
       setSessions((prev) => prev.filter((s) => s.id !== sessionId));
       if (currentSession?.id === sessionId) {
         setCurrentSession(null);

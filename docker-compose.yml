@@ -16,8 +16,8 @@ services:
     image: rag-chatbot/backend:latest
     container_name: rag_backend
     restart: unless-stopped
-    mem_limit: 300m
-    memswap_limit: 300m
+    mem_limit: 700m
+    memswap_limit: 700m
     oom_kill_disable: false
     ports:
       - "8000:8000"
@@ -120,6 +120,35 @@ services:
       retries: 3
       start_period: 30s
 
+  # ─── Celery Beat Scheduler ─────────────────────────────────────────────────
+  celery-beat:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: runner
+    image: rag-chatbot/backend:latest
+    container_name: rag_celery_beat
+    restart: unless-stopped
+    mem_limit: 100m
+    memswap_limit: 100m
+    oom_kill_disable: false
+    command: celery -A app.celery_app beat --loglevel=info --schedule=/tmp/celerybeat-schedule
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - REDIS_URL=${REDIS_URL}
+      - CELERY_BROKER_URL=${CELERY_BROKER_URL:-redis://redis:6379/1}
+      - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND:-redis://redis:6379/2}
+      - SECRET_KEY=${SECRET_KEY}
+      - ENVIRONMENT=production
+    depends_on:
+      redis:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+    networks:
+      - rag_network
+    logging: *default-logging
+
   # ─── PostgreSQL + pgvector ─────────────────────────────────────────────────
   postgres:
     build:
@@ -217,8 +246,8 @@ services:
     image: ollama/ollama:latest
     container_name: rag_ollama
     restart: unless-stopped
-    mem_limit: 6500m
-    memswap_limit: 6500m
+    mem_limit: 6100m
+    memswap_limit: 6100m
     oom_kill_disable: false
     ports:
       - "11434:11434"

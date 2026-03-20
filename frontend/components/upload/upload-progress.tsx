@@ -6,7 +6,7 @@ import { CheckCircle2, XCircle, FileText } from "lucide-react";
 interface UploadFile {
   fileName: string;
   progress: number;
-  status: "pending" | "uploading" | "completed" | "error";
+  status: "pending" | "uploading" | "processing" | "completed" | "error";
   error?: string;
   docId?: string;
 }

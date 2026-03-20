@@ -1,6 +1,6 @@
 # ─── RAG Chatbot Makefile ─────────────────────────────────────────────────────
 # Requires: docker, docker compose v2, make
-.PHONY: up down logs init health backup clean build rebuild dev shell ps pull docker-start check-docker
+.PHONY: up down logs init health backup clean build rebuild dev shell ps pull docker-start check-docker test monitor
 
 COMPOSE      := docker compose
 COMPOSE_DEV  := docker compose -f docker-compose.yml -f docker-compose.dev.yml
@@ -101,6 +101,14 @@ ram:
 ## ram-watch: Watch RAM usage (refresh every 5s)
 ram-watch:
 	@python3 infra/monitoring/check_ram.py --interval 5
+
+## monitor: Alias for ram (RAM usage snapshot)
+monitor:
+	@python3 infra/monitoring/check_ram.py
+
+## test: Run backend pytest suite
+test:
+	@$(COMPOSE) exec backend pytest tests/ -v --tb=short
 
 ## stats: Show docker stats
 stats:

@@ -1,20 +1,20 @@
 "use client";
 
 import { useCallback, useState } from "react";
-import { uploadDocument, getDocuments, deleteDocument } from "@/lib/api";
+import { api } from "@/lib/api";
 import type { Document } from "@/types";
 
-interface UploadProgress {
+interface UploadFileState {
   fileName: string;
   progress: number;
-  status: "pending" | "uploading" | "completed" | "error";
+  status: "pending" | "uploading" | "processing" | "completed" | "error";
   error?: string;
   docId?: string;
 }
 
 interface UseUploadReturn {
   documents: Document[];
-  uploadProgress: UploadProgress[];
+  uploadProgress: UploadFileState[];
   isLoading: boolean;
   error: string | null;
   fetchDocuments: () => Promise<void>;
@@ -25,7 +25,7 @@ interface UseUploadReturn {
 
 export function useUpload(): UseUploadReturn {
   const [documents, setDocuments] = useState<Document[]>([]);
-  const [uploadProgress, setUploadProgress] = useState<UploadProgress[]>([]);
+  const [uploadProgress, setUploadProgress] = useState<UploadFileState[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -37,7 +37,7 @@ export function useUpload(): UseUploadReturn {
     setIsLoading(true);
     setError(null);
     try {
-      const response = await getDocuments(1, 50);
+      const response = await api.listDocuments(1, 50);
       setDocuments(response.documents);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed to fetch documents";
@@ -51,7 +51,7 @@ export function useUpload(): UseUploadReturn {
     setError(null);
 
     // Initialize progress for all files
-    const initialProgress: UploadProgress[] = files.map((file) => ({
+    const initialProgress: UploadFileState[] = files.map((file) => ({
       fileName: file.name,
       progress: 0,
       status: "pending",
@@ -69,7 +69,7 @@ export function useUpload(): UseUploadReturn {
       );
 
       try {
-        const result = await uploadDocument(file, (progress) => {
+        const result = await api.uploadDocument(file, (progress) => {
           setUploadProgress((prev) =>
             prev.map((p, idx) =>
               idx === i ? { ...p, progress } : p
@@ -80,7 +80,7 @@ export function useUpload(): UseUploadReturn {
         setUploadProgress((prev) =>
           prev.map((p, idx) =>
             idx === i
-              ? { ...p, status: "completed", progress: 100, docId: result.doc_id }
+              ? { ...p, status: "processing", progress: 100, docId: result.doc_id }
               : p
           )
         );
@@ -101,11 +101,12 @@ export function useUpload(): UseUploadReturn {
   const deleteDocumentById = useCallback(async (docId: string) => {
     setError(null);
     try {
-      await deleteDocument(docId);
+      await api.deleteDocument(docId);
       setDocuments((prev) => prev.filter((d) => d.id !== docId));
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed to delete document";
       setError(message);
+      throw err;
     }
   }, []);
 

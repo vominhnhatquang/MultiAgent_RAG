@@ -32,7 +32,7 @@ def test_clean_text_strips_lone_page_numbers() -> None:
     text = "Some content\n42\nMore content"
     result = clean_text(text)
     # lone page number line should be removed
-    lines = [l.strip() for l in result.split("\n") if l.strip()]
+    lines = [line.strip() for line in result.split("\n") if line.strip()]
     assert "42" not in lines
 
 

@@ -33,7 +33,7 @@ class Document(Base):
 
     __table_args__ = (
         CheckConstraint(
-            "status IN ('processing', 'indexed', 'error', 'deleted')",
+            "status IN ('queued', 'processing', 'indexed', 'error', 'deleted')",
             name="chk_documents_status",
         ),
         CheckConstraint(

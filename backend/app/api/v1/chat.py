@@ -72,6 +72,11 @@ class DeleteSessionResponse(BaseModel):
     messages_removed: int
 
 
+class UpdateSessionRequest(BaseModel):
+    title: str | None = Field(None, max_length=200)
+    mode: str | None = Field(None, pattern="^(strict|general)$")
+
+
 class FeedbackRequest(BaseModel):
     rating: str = Field(..., pattern="^(thumbs_up|thumbs_down)$")
     comment: str | None = None
@@ -184,6 +189,48 @@ async def get_session_detail(
             )
             for m in messages
         ],
+    )
+
+
+@router.patch("/sessions/{session_id}", response_model=SessionItem)
+async def update_session(
+    session_id: uuid.UUID,
+    body: UpdateSessionRequest,
+    db: AsyncSession = Depends(get_session),
+) -> SessionItem:
+    """
+    Update session title and/or mode.
+
+    Args:
+        session_id: Session UUID
+        body: Fields to update (title, mode)
+        db: Database session
+
+    Returns:
+        Updated session
+    """
+    result = await db.execute(select(Session).where(Session.id == session_id))
+    sess = result.scalars().first()
+    if not sess:
+        raise NotFoundError("Session not found", "SESSION_NOT_FOUND").to_http()
+
+    # Update fields if provided
+    if body.title is not None:
+        sess.title = body.title
+    if body.mode is not None:
+        sess.mode = body.mode
+
+    await db.commit()
+    await db.refresh(sess)
+
+    return SessionItem(
+        id=sess.id,
+        title=sess.title,
+        mode=sess.mode,
+        tier=sess.tier,
+        message_count=sess.message_count,
+        created_at=sess.created_at,
+        updated_at=sess.updated_at,
     )
 
 

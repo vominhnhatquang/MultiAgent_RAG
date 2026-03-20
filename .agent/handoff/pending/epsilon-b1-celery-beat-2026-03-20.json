@@ -1,0 +1,49 @@
+{
+  "agent": "epsilon-devops",
+  "task": "B1 — Add Celery Beat Container + Scheduled Tasks",
+  "phase": "improvement_plan Phase B1",
+  "completed": "2026-03-20",
+  "files_modified": [
+    "docker-compose.yml",
+    "backend/app/celery_app.py",
+    "backend/app/tasks.py",
+    "infra/monitoring/check_ram.py",
+    "infra/scripts/health-check.sh",
+    "improvement_plan.md"
+  ],
+  "changes": {
+    "docker-compose.yml": [
+      "Added celery-beat service (container: rag_celery_beat)",
+      "mem_limit: 100m, memswap_limit: 100m",
+      "command: celery -A app.celery_app beat --loglevel=info --schedule=/tmp/celerybeat-schedule",
+      "depends_on: redis (healthy) + backend (healthy)"
+    ],
+    "backend/app/celery_app.py": [
+      "Added 'from celery.schedules import crontab'",
+      "Added beat_schedule with 3 tasks:",
+      "  archive-warm-sessions: crontab(hour=3, minute=0) — Daily 03:00 UTC",
+      "  cleanup-old-uploads: crontab(hour=4, minute=0) — Daily 04:00 UTC",
+      "  health-check: every 300s (5 minutes)"
+    ],
+    "backend/app/tasks.py": [
+      "Removed duplicate beat_schedule (now centralized in celery_app.py)"
+    ],
+    "infra/monitoring/check_ram.py": [
+      "Added rag_celery_beat: 100 to MEMORY_BUDGETS",
+      "Updated TOTAL_BUDGET_MB: 9100 → 9200"
+    ],
+    "infra/scripts/health-check.sh": [
+      "Added check_docker_container for rag_celery_beat"
+    ]
+  },
+  "acceptance_criteria": {
+    "make_up_starts_celery_beat": "celery-beat service added to docker-compose.yml",
+    "schedule_loaded": "beat_schedule configured in celery_app.py with 3 tasks",
+    "scheduled_tasks_fire": "crontab + interval schedules set per spec",
+    "ram_budget_ok": "9.2GB total (< 10GB): backend 700M + celery-beat 100M + others"
+  },
+  "notes": [
+    "archive_warm_to_cold task reference in beat_schedule requires Beta to register it as a Celery task in tasks.py (A1 implementation)",
+    "Beat will log 'Received unregistered task' for archive_warm_to_cold until Beta adds the @celery_app.task decorator"
+  ]
+}

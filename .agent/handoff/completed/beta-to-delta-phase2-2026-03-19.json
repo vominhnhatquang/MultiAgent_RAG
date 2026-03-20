@@ -1,0 +1,33 @@
+{
+  "handoff_id": "hf-beta-delta-phase2-20260319",
+  "from_agent": "beta",
+  "to_agent": "delta",
+  "phase": 2,
+  "reviewed_by": "alpha",
+  "review_date": "2026-03-20",
+  "status": "ACCEPTED",
+  "context_summary": "Retrieval pipeline hoàn chỉnh: HyDE + Hybrid + Rerank + Guard + Mode Switch + 3-tier Memory. API endpoints không thay đổi so với Phase 1.",
+  "deliverables": [
+    "backend/app/core/retrieval/* (hybrid_search, query_transformer, reranker, pipeline)",
+    "backend/app/core/generation/guard.py",
+    "backend/app/core/generation/mode_switch.py",
+    "backend/app/core/generation/intent_classifier.py",
+    "backend/app/core/generation/prompt_builder.py",
+    "backend/app/core/generation/streamer.py (Phase 2 integration)",
+    "backend/app/core/memory/memory_tiers.py (Hot + Warm)",
+    "backend/app/core/memory/ollama_scheduler.py",
+    "backend/tests/**"
+  ],
+  "acceptance_criteria": {
+    "hyde_implemented": "PASS — 0.7/0.3 weights, parallel HyDE+multi-query",
+    "hybrid_search": "PASS — BM25+Vector+RRF (k=60)",
+    "reranker": "PASS — bge-reranker-v2-m3 via sentence-transformers, lazy load, CPU",
+    "strict_guard": "PASS — threshold 0.7, Vietnamese messages",
+    "mode_switch": "PASS — strict/general routing with template responses",
+    "intent_classifier": "PASS — rule-based bilingual Vietnamese/English",
+    "llm_router": "PASS — Ollama + Gemini fallback",
+    "streamer_integration": "PASS — full SSE pipeline with all Phase 2 components",
+    "memory_tiers": "PARTIAL — Hot(Redis)+Warm(PG) only, Cold tier deferred to improvement plan"
+  },
+  "notes": "Phase 2 backend core hoàn chỉnh. Cold tier storage (ADR-006) và Celery ingestion (ADR-007) được ghi nhận trong improvement_plan.md task A1 và A2."
+}
